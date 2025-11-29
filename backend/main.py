@@ -4,10 +4,10 @@ from utils.openai_client import ask_openai
 app = FastAPI()
 
 @app.get("/")
-def root():
-    return {"message": "TARA AI backend is running"}
+def home():
+    return {"message": "TARA AI backend is running!"}
 
-@app.get("/ask")
+@app.post("/ask")
 def ask(question: str):
     answer = ask_openai(question)
     return {"answer": answer}
