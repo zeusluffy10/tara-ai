@@ -118,17 +118,22 @@ def get_directions(origin: Union[str, Dict[str, float]],
                    mode: str = "walking",
                    timeout: float = 6.0) -> Optional[Dict[str, Any]]:
     """
-    Returns route information or None:
+    BEST VERSION: normalized route with coordinates for EVERY step.
     {
-        "distance": "10 km",
-        "duration": "25 mins",
-        "start_address": "...",
-        "end_address": "...",
         "polyline": "...",
-        "steps": [ { "instruction": "...", "distance": "...", "duration": "..."} ]
+        "distance": {"text": "...", "value": ...},
+        "duration": {"text": "...", "value": ...},
+        "destination": {"lat": ..., "lng": ...},
+        "steps": [
+           {
+              "instruction": "Turn left",
+              "lat": 14.6, "lng": 120.98,
+              "distance": {...},
+              "duration": {...}
+           },
+           ...
+        ]
     }
-    mode: 'walking' | 'driving' | 'transit' | 'bicycling'
-    origin/destination may be strings (addresses) or dicts with lat/lng.
     """
     if mode not in {"walking", "driving", "transit", "bicycling"}:
         mode = "walking"
@@ -138,6 +143,9 @@ def get_directions(origin: Union[str, Dict[str, float]],
         "destination": _format_location_param(destination),
         "mode": mode,
         "key": GOOGLE_MAPS_SERVER_KEY,
+        "units": "metric",
+        "alternatives": "false",
+        "language": "en",
     }
 
     try:
@@ -154,29 +162,111 @@ def get_directions(origin: Union[str, Dict[str, float]],
     try:
         route = data["routes"][0]
         leg = route["legs"][0]
-    except (IndexError, KeyError) as e:
-        print(f"[maps_client] Unexpected directions response shape: {e}")
+    except (IndexError, KeyError):
+        print("[maps_client] Unexpected directions response shape")
         return None
 
-    # Extract steps, clean HTML instructions
-    steps = []
-    for step in leg.get("steps", []):
-        html_instr = step.get("html_instructions", "")
-        instr = _strip_html_tags(html_instr)
-        steps.append({
+    # --------------------------------------------------------
+    # ROUTE-LEVEL DATA
+    # --------------------------------------------------------
+    overview = route.get("overview_polyline", {})
+    polyline_str = overview.get("points") if isinstance(overview, dict) else None
+
+    route_distance = leg.get("distance")
+    route_duration = leg.get("duration")
+
+    end_loc = leg.get("end_location") or {}
+    lat_end = end_loc.get("lat") or end_loc.get("latitude")
+    lng_end = end_loc.get("lng") or end_loc.get("longitude")
+    destination_coords = None
+    if lat_end is not None and lng_end is not None:
+        destination_coords = {"lat": float(lat_end), "lng": float(lng_end)}
+
+    # --------------------------------------------------------
+    # STEP PARSING (BEST METHOD)
+    # --------------------------------------------------------
+    parsed_steps = []
+
+    for s in leg.get("steps", []):
+        # Clean instructions
+        instr_raw = s.get("html_instructions") or s.get("instruction") or ""
+        instr = _strip_html_tags(instr_raw)
+
+        # Step distance + duration
+        step_dist = s.get("distance") or {}
+        step_dur = s.get("duration") or {}
+
+        # ------------------------------
+        # 1) Try end_location
+        # ------------------------------
+        loc = s.get("end_location")
+        lat = loc.get("lat") or loc.get("latitude") if loc else None
+        lng = loc.get("lng") or loc.get("longitude") if loc else None
+
+        # ------------------------------
+        # 2) Fallback: start_location
+        # ------------------------------
+        if lat is None or lng is None:
+            loc2 = s.get("start_location")
+            if loc2:
+                lat = loc2.get("lat") or loc2.get("latitude")
+                lng = loc2.get("lng") or loc2.get("longitude")
+
+        # ------------------------------
+        # 3) FINAL FALLBACK:
+        #    decode the step polyline and take the last coordinate
+        # ------------------------------
+        if (lat is None or lng is None) and s.get("polyline"):
+            pts = None
+            poly = s["polyline"]
+            if isinstance(poly, dict):
+                pts = poly.get("points")
+            elif isinstance(poly, str):
+                pts = poly
+
+            if pts:
+                try:
+                    import polyline as poly_mod  # pip install polyline OR use internal
+                    coords = poly_mod.decode(pts)
+                    if coords:
+                        lat = coords[-1][0]
+                        lng = coords[-1][1]
+                except Exception as e:
+                    print(f"[maps_client] Step polyline decode failed: {e}")
+
+        # Convert
+        lat_f = float(lat) if lat is not None else None
+        lng_f = float(lng) if lng is not None else None
+
+        parsed_steps.append({
             "instruction": instr,
-            "distance": step.get("distance", {}).get("text"),
-            "duration": step.get("duration", {}).get("text"),
+            "lat": lat_f,
+            "lng": lng_f,
+            "distance": {"text": step_dist.get("text"), "value": step_dist.get("value")},
+            "duration": {"text": step_dur.get("text"), "value": step_dur.get("value")},
         })
 
-    return {
-        "distance": leg.get("distance", {}).get("text"),
-        "duration": leg.get("duration", {}).get("text"),
+    # --------------------------------------------------------
+    # FINAL OBJECT
+    # --------------------------------------------------------
+    normalized = {
+        "polyline": polyline_str,
+        "distance": {
+            "text": route_distance.get("text") if route_distance else None,
+            "value": route_distance.get("value") if route_distance else None
+        },
+        "duration": {
+            "text": route_duration.get("text") if route_duration else None,
+            "value": route_duration.get("value") if route_duration else None
+        },
         "start_address": leg.get("start_address"),
         "end_address": leg.get("end_address"),
-        "polyline": route.get("overview_polyline", {}).get("points"),
-        "steps": steps,
+        "destination": destination_coords,
+        "steps": parsed_steps,
     }
+
+    return normalized
+
 
 
 # -----------------------------------------------------------

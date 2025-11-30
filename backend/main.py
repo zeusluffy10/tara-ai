@@ -1,9 +1,14 @@
-# backend/main.py
 from fastapi import FastAPI, Query, HTTPException, File, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import html
+
+# new imports for /transcribe
+import os
+import tempfile
+import requests
+import re
 
 from utils.openai_client import ask_openai
 from utils.maps_client import (
@@ -27,6 +32,16 @@ class SimplifyPayload(BaseModel):
     # optional user preferences (voice speed, senior_mode etc)
     prefs: Optional[Dict[str, Any]] = None
 
+def _strip_html(s: str) -> str:
+    """Remove HTML tags and unescape entities."""
+    clean = re.sub(r"<[^>]+>", "", s or "")
+    return html.unescape(clean).strip()
+
+def _get_latlng_from_loc(loc: dict) -> Tuple[float, float]:
+    """Extract lat/lng from a Google location dict {lat: .., lng: ..}"""
+    if not loc:
+        return (None, None)
+    return (loc.get("lat") or loc.get("latitude"), loc.get("lng") or loc.get("longitude"))
 
 @app.get("/")
 def home():
@@ -94,18 +109,66 @@ def get_place(place_id: str = Query(..., description="Google place_id")):
 # DIRECTIONS / ROUTE
 # -------------------------------------------------------
 @app.get("/route")
-def route(origin: str = Query(..., description="origin address or 'lat,lng'"),
-          destination: str = Query(..., description="destination address or 'lat,lng'"),
-          mode: str = Query("walking", description="walking|driving|transit|bicycling")):
+def route(
+    origin: str = Query(..., description="origin address or 'lat,lng'"),
+    destination: str = Query(..., description="destination address or 'lat,lng'"),
+    mode: str = Query("walking", description="walking | driving | transit | bicycling")
+):
     """
-    Example:
-      GET /route?origin=14.5995,120.9842&destination=14.6050,120.9878&mode=walking
-    Returns parsed route with cleaned step instructions (no HTML).
+    Returns unified navigation-friendly route object.
+    {
+       "status": "ok",
+       "route": { ... normalized route from get_directions() ... }
+    }
+    OR
+    {
+       "status": "error",
+       "code": "NO_ROUTE",
+       "message": "No walking route found."
+    }
     """
-    route = get_directions(origin, destination, mode=mode)
-    if route is None:
-        raise HTTPException(status_code=500, detail="directions error")
-    return {"status": "ok", "route": route}
+
+    # -------- VALIDATION ----------
+    if not origin or not destination:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "code": "INVALID_INPUT",
+                "message": "Origin and destination are required."
+            }
+        )
+
+    # -------- PROCESS ------------
+    try:
+        route_obj = get_directions(origin, destination, mode=mode)
+    except Exception as e:
+        print("Internal get_directions error:", e)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "code": "INTERNAL_ROUTE_ERROR",
+                "message": "Internal routing engine failed."
+            }
+        )
+
+    # -------- NO ROUTE FOUND ------------
+    if route_obj is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "status": "error",
+                "code": "NO_ROUTE",
+                "message": "No route found for given origin/destination."
+            }
+        )
+
+    # -------- SUCCESS ------------
+    return {
+        "status": "ok",
+        "route": route_obj
+    }
 
 
 # -------------------------------------------------------
@@ -162,3 +225,50 @@ Respond with the simplified steps only (no extra explanation).
         simple_lines = [s.strip() for s in answer.replace("•", ".").split(".") if s.strip()]
 
     return {"status": "ok", "simple": simple_lines, "raw_reply": answer}
+
+
+# -------------------------------------------------------
+# TRANSCRIBE — audio -> text via OpenAI Whisper (whisper-1)
+# -------------------------------------------------------
+@app.post("/transcribe")
+async def transcribe_audio(file: UploadFile = File(...)):
+    """
+    Upload an audio file (.m4a/.wav/.mp3) and receive transcribed text.
+    Uses OpenAI Audio Transcriptions endpoint (model=whisper-1).
+    Returns: { "text": "transcribed text" }
+    """
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    if not OPENAI_API_KEY:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured in environment")
+
+    # Save upload to temp file
+    suffix = os.path.splitext(file.filename)[1] or ".m4a"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp_path = tmp.name
+        contents = await file.read()
+        tmp.write(contents)
+
+    try:
+        with open(tmp_path, "rb") as f:
+            files = {
+                "file": (file.filename, f, file.content_type or "audio/m4a"),
+            }
+            data = {"model": "whisper-1"}
+            headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
+            resp = requests.post("https://api.openai.com/v1/audio/transcriptions",
+                                 headers=headers, files=files, data=data, timeout=60)
+
+        if resp.status_code != 200:
+            # surface OpenAI error
+            raise HTTPException(status_code=502, detail=f"Transcription service error: {resp.status_code} {resp.text}")
+
+        j = resp.json()
+        text = j.get("text") or j.get("transcript") or ""
+        return JSONResponse(status_code=200, content={"text": text})
+
+    finally:
+        # cleanup temp file
+        try:
+            os.remove(tmp_path)
+        except Exception:
+            pass

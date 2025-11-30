@@ -2,5 +2,7 @@ fastapi
 uvicorn
 python-dotenv
 openai>=1.0.0
+python-multipart
 requests
 pydantic
+polyline
