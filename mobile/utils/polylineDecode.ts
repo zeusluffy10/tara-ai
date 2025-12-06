@@ -1,3 +1,5 @@
+
+// @ts-ignore
 import polyline from "@mapbox/polyline";
 
 export type LatLng = { latitude: number; longitude: number };

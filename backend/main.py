@@ -32,10 +32,14 @@ class SimplifyPayload(BaseModel):
     # optional user preferences (voice speed, senior_mode etc)
     prefs: Optional[Dict[str, Any]] = None
 
-def _strip_html(s: str) -> str:
-    """Remove HTML tags and unescape entities."""
-    clean = re.sub(r"<[^>]+>", "", s or "")
-    return html.unescape(clean).strip()
+# def _strip_html(s: str) -> str:
+#     """Remove HTML tags and unescape entities."""
+#     clean = re.sub(r"<[^>]+>", "", s or "")
+#     return html.unescape(clean).strip()
+
+def _strip_html_tags(s: str) -> str:
+    text = _re.sub(r"<[^>]+>", "", s or "")
+    return _html.unescape(text).strip()
 
 def _get_latlng_from_loc(loc: dict) -> Tuple[float, float]:
     """Extract lat/lng from a Google location dict {lat: .., lng: ..}"""
@@ -115,20 +119,23 @@ def route(
     mode: str = Query("walking", description="walking | driving | transit | bicycling")
 ):
     """
-    Returns unified navigation-friendly route object.
+    Unified route endpoint:
+      - Try existing get_directions() first (keeps current provider)
+      - If result missing step-by-step instructions, call Google Directions
+        and augment the route with 'steps' (plain text instructions + distance/duration).
+    Response:
     {
-       "status": "ok",
-       "route": { ... normalized route from get_directions() ... }
-    }
-    OR
-    {
-       "status": "error",
-       "code": "NO_ROUTE",
-       "message": "No walking route found."
+      "status": "ok",
+      "route": {
+         "polyline": "...",
+         "distance": {...},
+         "duration": {...},
+         "steps": [ { instruction, distance, duration, start_location, end_location, polyline }, ... ]
+      }
     }
     """
 
-    # -------- VALIDATION ----------
+    # validation
     if not origin or not destination:
         return JSONResponse(
             status_code=400,
@@ -139,7 +146,7 @@ def route(
             }
         )
 
-    # -------- PROCESS ------------
+    # try the existing provider first
     try:
         route_obj = get_directions(origin, destination, mode=mode)
     except Exception as e:
@@ -153,23 +160,105 @@ def route(
             }
         )
 
-    # -------- NO ROUTE FOUND ------------
+    # if provider returned nothing, we will try Google below
     if route_obj is None:
+        # fallthrough to try google directions
+        route_obj = None
+
+    # If route_obj already contains steps, return it immediately
+    if isinstance(route_obj, dict) and route_obj.get("steps"):
+        return {"status": "ok", "route": route_obj}
+
+    # At this point either route_obj is None or missing steps.
+    # Attempt to fetch detailed directions (including steps) from Google Directions API.
+    GOOGLE_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
+    if not GOOGLE_KEY:
+        # If key missing and we already have a polyline/distance/duration, return that as a fallback
+        if route_obj:
+            return {"status": "ok", "route": route_obj}
         return JSONResponse(
-            status_code=404,
+            status_code=500,
             content={
                 "status": "error",
-                "code": "NO_ROUTE",
-                "message": "No route found for given origin/destination."
+                "code": "NO_MAPS_KEY",
+                "message": "Missing GOOGLE_MAPS_API_KEY on server to fetch detailed directions."
             }
         )
 
-    # -------- SUCCESS ------------
-    return {
-        "status": "ok",
-        "route": route_obj
-    }
+    try:
+        params = {
+            "origin": origin,
+            "destination": destination,
+            "key": GOOGLE_KEY,
+            "mode": mode,
+            "alternatives": "false",
+            "departure_time": "now"
+        }
+        resp = requests.get("https://maps.googleapis.com/maps/api/directions/json", params=params, timeout=15)
+        if resp.status_code != 200:
+            raise Exception(f"Google Directions HTTP {resp.status_code}: {resp.text}")
 
+        data = resp.json()
+        status = data.get("status", "")
+        if status != "OK":
+            # If no route found but we have a fallback route_obj, return it
+            if route_obj:
+                return {"status": "ok", "route": route_obj}
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "code": "DIRECTIONS_API",
+                    "message": f"Google Directions returned {status}: {data.get('error_message')}"
+                }
+            )
+
+        route0 = data["routes"][0]
+        leg0 = route0["legs"][0]
+
+        # Build normalized steps (plain text instructions)
+        steps_raw = leg0.get("steps", [])
+        steps = []
+        for s in steps_raw:
+            instr_html = s.get("html_instructions", "")
+            instr_text = _strip_html_tags(instr_html)
+            steps.append({
+                "instruction": instr_text,
+                "distance": s.get("distance"),
+                "duration": s.get("duration"),
+                "start_location": s.get("start_location"),
+                "end_location": s.get("end_location"),
+                "polyline": s.get("polyline", {}).get("points"),
+            })
+
+        overview_polyline = route0.get("overview_polyline", {}).get("points")
+        distance = leg0.get("distance")
+        duration = leg0.get("duration")
+
+        # Merge with existing route_obj if available, prefer Google fields for steps and overview.
+        unified = route_obj if isinstance(route_obj, dict) else {}
+        unified.update({
+            "polyline": overview_polyline or unified.get("polyline"),
+            "distance": distance or unified.get("distance"),
+            "duration": duration or unified.get("duration"),
+            "steps": steps
+        })
+
+        return {"status": "ok", "route": unified}
+
+    except Exception as e:
+        print("Error fetching Google Directions:", e)
+        # fallback: if we previously had a route_obj without steps, return it
+        if route_obj:
+            return {"status": "ok", "route": route_obj}
+        return JSONResponse(
+            status_code=502,
+            content={
+                "status": "error",
+                "code": "DIRECTIONS_FETCH_FAILED",
+                "message": "Could not fetch directions from provider."
+            }
+        )
 
 # -------------------------------------------------------
 # SIMPLIFY — use OpenAI to convert raw steps -> short Taglish lines
