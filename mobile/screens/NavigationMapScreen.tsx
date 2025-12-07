@@ -7,7 +7,6 @@ import {
   StyleSheet,
   Alert,
   Vibration,
-  Platform,
 } from "react-native";
 import MapView, { Marker, Polyline, LatLng, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
@@ -16,6 +15,7 @@ import decodePolyline from "../utils/polylineDecode";
 import { StackScreenProps } from "@react-navigation/stack";
 import { RootStackParamList } from "../types/navigation";
 import { useSeniorMode } from "../context/SeniorModeContext";
+import { Audio } from "expo-av";
 
 type Props = StackScreenProps<RootStackParamList, "NavigationMapScreen">;
 
@@ -38,6 +38,8 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
   const watchRef = useRef<any>(null);
   const lastPosRef = useRef<{ pos: LatLng; time: number } | null>(null);
   const repeatCooldownRef = useRef<number>(0);
+  // near other useState declarations
+  const [nearestDist, setNearestDist] = useState<number | null>(null);
 
   useEffect(() => {
     // decode polyline if present
@@ -46,13 +48,61 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
       setPolyCoords(pts);
     }
 
-    // if steps exist but have no lat/lng, optionally compute fallback later
+    // If steps exist, initialize current index to 0 and speak instruction immediately
+    if (Array.isArray(routeData?.steps) && routeData.steps.length > 0) {
+      // ensure index is zero
+      setCurrentStepIndex(0);
+      // speak first instruction after a short delay so TTS isn't clipped by other lifecycle work
+      const first = routeData.steps[0];
+      const instr = first?.instruction || "Magpatuloy lamang";
+      setTimeout(() => {
+        try {
+          Speech.speak(instr, { rate: settings.slowTts ? 0.85 : 1 });
+        } catch (e) {
+          console.warn("TTS speak failed:", e);
+        }
+        // center map on first step if possible
+        const latlng = getStepLatLng(first);
+        if (latlng && mapRef.current) {
+          mapRef.current.animateToRegion({
+            latitude: latlng.latitude,
+            longitude: latlng.longitude,
+            latitudeDelta: 0.012,
+            longitudeDelta: 0.012,
+          }, 600);
+        } else if (polyCoords.length > 0 && mapRef.current) {
+          // fallback center on polyline start
+          const p = polyCoords[Math.max(0, Math.floor(polyCoords.length / 6))];
+          mapRef.current.animateToRegion({ latitude: p.latitude, longitude: p.longitude, latitudeDelta: 0.02, longitudeDelta: 0.02 }, 600);
+        }
+      }, 400);
+    }
+
     // start location watching
     startLocationWatch();
 
     return () => stopLocationWatch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Robust extractor for lat/lng for a given step object
+  function getStepLatLng(step: any): LatLng | null {
+    if (!step) return null;
+    // Many backends use 'lat' and 'lng'
+    if (typeof step.lat === "number" && typeof step.lng === "number") {
+      return { latitude: step.lat, longitude: step.lng };
+    }
+    // Some use start_location / end_location
+    const src = step.start_location || step.end_location || step.location || null;
+    if (src) {
+      const lat = src.lat ?? src.latitude ?? src.lat_val ?? null;
+      const lng = src.lng ?? src.longitude ?? src.lng_val ?? null;
+      if (typeof lat === "number" && typeof lng === "number") {
+        return { latitude: lat, longitude: lng };
+      }
+    }
+    return null;
+  }
 
   async function startLocationWatch() {
     try {
@@ -99,7 +149,9 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
       const dToDest = haversineDistance(newPos.latitude, newPos.longitude, dest.lat, dest.lng);
       if (!arrived && dToDest < 12) {
         setArrived(true);
-        Speech.speak("Nakarating ka na sa destinasyon. Salamat!", { rate: settings.slowTts ? 0.8 : 1 });
+        try {
+          Speech.speak("Nakarating ka na sa destinasyon. Salamat!", { rate: settings.slowTts ? 0.8 : 1 });
+        } catch {}
         stopLocationWatch();
       }
     }
@@ -148,66 +200,176 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
     }
   }
 
-  // update current step index using nearest step heuristic
+  // returns squared distance between two lat/lngs (fast)
+  function sqDist(a: LatLng, b: LatLng) {
+    const dx = (a.latitude - b.latitude);
+    const dy = (a.longitude - b.longitude);
+    return dx * dx + dy * dy;
+  }
+
+  // distance from point P to segment AB (meters). Uses haversine on endpoints for final distance.
+  function distancePointToSegment(p: LatLng, a: LatLng, b: LatLng) {
+    // project p onto segment in lat/lng "space" (approx ok for small areas)
+    const vx = b.latitude - a.latitude;
+    const vy = b.longitude - a.longitude;
+    const wx = p.latitude - a.latitude;
+    const wy = p.longitude - a.longitude;
+    const c1 = vx * wx + vy * wy;
+    if (c1 <= 0) return haversineDistance(p.latitude, p.longitude, a.latitude, a.longitude);
+    const c2 = vx * vx + vy * vy;
+    if (c2 <= c1) return haversineDistance(p.latitude, p.longitude, b.latitude, b.longitude);
+    const t = c1 / c2;
+    const proj = { latitude: a.latitude + vx * t, longitude: a.longitude + vy * t };
+    return haversineDistance(p.latitude, p.longitude, proj.latitude, proj.longitude);
+  }
+
+  // Given an encoded polyline (array of LatLng points), find the closest point on the polyline to `pt`
+  // returns { point, distMeters }
+  function closestPointOnPolyline(pt: LatLng, poly: LatLng[]) {
+    if (!poly || poly.length === 0) return { point: null, distMeters: Number.MAX_VALUE };
+    let bestPoint = poly[0];
+    let bestDist = Number.MAX_VALUE;
+    for (let i = 0; i < poly.length - 1; i++) {
+      const a = poly[i];
+      const b = poly[i + 1];
+      const d = distancePointToSegment(pt, a, b);
+      if (d < bestDist) {
+        bestDist = d;
+        // approximate closest point as either a, b or the projection — we can compute projection if needed
+        // but for our use we only need the distance and an approximate point; pick the closer endpoint for simplicity
+        const da = haversineDistance(pt.latitude, pt.longitude, a.latitude, a.longitude);
+        const db = haversineDistance(pt.latitude, pt.longitude, b.latitude, b.longitude);
+        bestPoint = da < db ? a : b;
+      }
+    }
+    return { point: bestPoint, distMeters: bestDist };
+  }
+
+
   function updateNearestStep(user: LatLng) {
     if (!routeData?.steps || routeData.steps.length === 0) return;
 
     let nearest = 0;
     let best = Number.MAX_VALUE;
 
+    // Pre-decode step polylines if present (cache in step._polyPoints to avoid repeated decode)
     routeData.steps.forEach((s: any, i: number) => {
-      if (typeof s.lat === "number" && typeof s.lng === "number") {
-        const d = haversineDistance(user.latitude, user.longitude, s.lat, s.lng);
-        if (d < best) {
-          best = d;
-          nearest = i;
-        }
-      } else if (polyCoords && polyCoords.length > 0) {
-        // fallback: compute distance to closest poly point segment (cheap: to poly point)
-        for (let p of polyCoords) {
-          const d = haversineDistance(user.latitude, user.longitude, p.latitude, p.longitude);
-          if (d < best) {
-            best = d;
-            nearest = i;
-          }
+      if (!s._polyPoints && s.polyline) {
+        try {
+          s._polyPoints = decodePolyline(s.polyline); // reuse your existing decoder
+        } catch (e) {
+          s._polyPoints = null;
         }
       }
     });
 
-    // threshold for switching step (30 meters)
-    if (nearest !== currentStepIndex && best < 30) {
+    for (let i = 0; i < routeData.steps.length; i++) {
+      const s = routeData.steps[i];
+
+      // 1) if step has polyline -> compute closest distance from user to that step polyline
+      if (s._polyPoints && s._polyPoints.length > 0) {
+        const { distMeters } = closestPointOnPolyline(user, s._polyPoints);
+        if (distMeters < best) {
+          best = distMeters;
+          nearest = i;
+        }
+        continue;
+      }
+
+      // 2) if step has explicit lat/lng use that
+      const latlng = getStepLatLng(s);
+      if (latlng) {
+        const d = haversineDistance(user.latitude, user.longitude, latlng.latitude, latlng.longitude);
+        if (d < best) {
+          best = d;
+          nearest = i;
+        }
+        continue;
+      }
+
+      // 3) fallback: use nearest point on overview polyline but restrict ranges (cheap)
+      if (polyCoords && polyCoords.length > 0) {
+        const { distMeters } = closestPointOnPolyline(user, polyCoords);
+        if (distMeters < best) {
+          best = distMeters;
+          nearest = i;
+        }
+      }
+    }
+
+    // debug log
+    console.log("Nearest step index:", nearest, "distanceMeters:", Math.round(best));
+    setNearestDist(Math.round(best));
+
+    // reasonable threshold: 40 meters is typical; use slight hysteresis by allowing 45 when switching forward
+    const SWITCH_THRESHOLD = 45;
+
+    if (nearest !== currentStepIndex && best < SWITCH_THRESHOLD) {
       setCurrentStepIndex(nearest);
-      // vibrate and speak the new instruction
-      try {
-        Vibration.vibrate(180);
-      } catch {}
+      try { Vibration.vibrate(180); } catch {}
       const newStep = routeData.steps[nearest];
       if (newStep && newStep.instruction) {
-        Speech.speak(newStep.instruction, { rate: settings.slowTts ? 0.85 : 1 });
+        try { Speech.speak(newStep.instruction, { rate: settings.slowTts ? 0.85 : 1 }); } catch (e) { console.warn(e); }
       }
     }
   }
 
-  // manual repeat button
-  function repeatInstruction() {
-    const step = routeData?.steps?.[currentStepIndex];
-    if (!step) return;
-    Speech.speak(step.instruction, { rate: settings.slowTts ? 0.85 : 1 });
+  // robust repeatInstruction() — replace your existing function
+  // robust repeatInstruction() with audio-mode fix
+  async function repeatInstruction() {
+    try {
+      console.log("DEBUG: repeatInstruction called, currentStepIndex=", currentStepIndex);
+      Alert.alert("DEBUG", `Repeat pressed (step ${currentStepIndex})`);
+
+      // Defensive fallback: try to set audio mode but only minimal fields
+      try {
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          staysActiveInBackground: false,
+          playsInSilentModeIOS: true,
+          shouldDuckAndroid: false,
+        });
+        console.log("DEBUG: Audio mode set (playsInSilentModeIOS=true) [fallback attempt]");
+      } catch (e) {
+        console.warn("DEBUG: setAudioModeAsync fallback failed:", e);
+      }
+
+      // Stop any earlier speech
+      try { await Speech.stop(); } catch (e) { console.warn("DEBUG: Speech.stop failed", e); }
+
+      const steps = routeData?.steps;
+      const total = Array.isArray(steps) ? steps.length : 0;
+      if (!Array.isArray(steps) || total === 0) {
+        const fallbackMsg = routeData?.fallbackMessage ?? `Proceed to destination. ETA: ${predictedEta || "unknown"}.`;
+        console.log("DEBUG: no steps, speaking fallback:", fallbackMsg);
+        Speech.speak(fallbackMsg, { rate: settings.slowTts ? 0.85 : 1 });
+        return;
+      }
+
+      const safeIndex = Math.max(0, Math.min(total - 1, currentStepIndex));
+      const step = steps[safeIndex];
+      if (!step || !step.instruction) {
+        const arrivalMsg = "Nakarating ka na sa destinasyon. Salamat!";
+        Speech.speak(arrivalMsg, { rate: settings.slowTts ? 0.85 : 1 });
+        return;
+      }
+
+      console.log("DEBUG: Speaking instruction:", step.instruction);
+      Speech.speak(step.instruction, { rate: settings.slowTts ? 0.85 : 1 });
+    } catch (err) {
+      console.error("DEBUG: repeatInstruction unexpected error:", err);
+      Alert.alert("Error", String(err));
+    }
   }
 
   // auto-repeat when stopped (called in watch callback via handlePositionUpdate)
   useEffect(() => {
     if (!settings.autoRepeat) return;
 
-    // We will rely on lastPosRef and repeatCooldownRef within computeEta & handlePositionUpdate
-    // But implement a light-weight interval to check stopped state if needed
     const interval = setInterval(async () => {
-      // if no user pos, skip
       if (!userPos) return;
 
-      // determine recent speed (rough)
       let recentSpeed = 0;
-      // if platform provides speed in last location, compute from lastPosRef
       if (lastPosRef.current) {
         const last = lastPosRef.current;
         const dt = (Date.now() - last.time) / 1000;
@@ -217,14 +379,14 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
         }
       }
 
-      // if effectively stopped (<0.4 m/s), and autoRepeat enabled, repeat instruction after configured delay
       if (recentSpeed < 0.4) {
         const now = Date.now();
         if (now - (repeatCooldownRef.current ?? 0) > (settings.repeatDelaySec * 1000 + 2000)) {
-          // speak
           const step = routeData?.steps?.[currentStepIndex];
           if (step && step.instruction) {
-            Speech.speak(step.instruction, { rate: settings.slowTts ? 0.85 : 1 });
+            try {
+              Speech.speak(step.instruction, { rate: settings.slowTts ? 0.85 : 1 });
+            } catch {}
             repeatCooldownRef.current = now;
           }
         }
@@ -242,7 +404,7 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
       longitude: userPos.longitude,
       latitudeDelta: 0.01,
       longitudeDelta: 0.01,
-    });
+    }, 400);
   }
 
   function finishNavigation() {
@@ -252,6 +414,9 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
 
   const nextInstruction = routeData?.steps?.[currentStepIndex]?.instruction ?? "Magpatuloy lamang";
 
+  // ---------------------
+  // RETURN UI
+  // ---------------------
   return (
     <View style={styles.container}>
       <MapView
@@ -268,22 +433,42 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
         showsMyLocationButton={false}
       >
         {polyCoords.length > 0 && (
-          <Polyline coordinates={polyCoords} strokeWidth={5} strokeColor="#007AFF" lineJoin="round" />
+          <Polyline
+            coordinates={polyCoords}
+            strokeWidth={5}
+            strokeColor="#007AFF"
+            lineJoin="round"
+          />
         )}
 
         {routeData?.destination && (
           <Marker
-            coordinate={{ latitude: routeData.destination.lat, longitude: routeData.destination.lng }}
+            coordinate={{
+              latitude: routeData.destination.lat,
+              longitude: routeData.destination.lng,
+            }}
             title="Destination"
           />
         )}
+        {routeData?.steps?.map((s: any, i: number) => {
+          const p = getStepLatLng(s) || (s._polyPoints && s._polyPoints[0]) || null;
+          if (!p) return null;
+          return (
+            <Marker
+              key={`step-${i}`}
+              coordinate={{ latitude: p.latitude, longitude: p.longitude }}
+              pinColor={i === currentStepIndex ? "green" : "orange"}
+            />
+          );
+        })}
       </MapView>
 
-      {/* top controls */}
+      {/* Top Buttons */}
       <View style={styles.topControls}>
         <TouchableOpacity style={styles.controlBtn} onPress={centerMapOnUser}>
           <Text style={styles.controlText}>Center</Text>
         </TouchableOpacity>
+
         <TouchableOpacity
           style={[styles.controlBtn, { backgroundColor: "#333" }]}
           onPress={() =>
@@ -297,20 +482,71 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
         </TouchableOpacity>
       </View>
 
-      {/* bottom card */}
-      <View style={[styles.bottomCard, settings.highContrast && { backgroundColor: "#000", borderColor: "#444" }]}>
+      {/* Bottom card */}
+      <View
+        style={[
+          styles.bottomCard,
+          settings.highContrast && {
+            backgroundColor: "#000",
+            borderColor: "#444",
+          },
+        ]}
+      >
         <View style={{ flex: 1 }}>
-          <Text style={[styles.nextLabel, settings.bigText && { fontSize: 18 }]}>Susunod:</Text>
-          <Text style={[styles.instructionText, settings.bigText && { fontSize: 20 }]}>
+          <Text style={[styles.nextLabel, settings.bigText && { fontSize: 18 }]}>
+            Susunod:
+          </Text>
+
+          <Text
+            style={[styles.instructionText, settings.bigText && { fontSize: 20 }]}
+          >
             {nextInstruction}
           </Text>
 
-          <Text style={[styles.etaText, settings.bigText && { fontSize: 16 }]}>ETA: {predictedEta}</Text>
+          <Text style={[styles.etaText, settings.bigText && { fontSize: 16 }]}>
+            ETA: {predictedEta}
+          </Text>
         </View>
 
         <View style={{ justifyContent: "center", marginLeft: 8 }}>
-          <TouchableOpacity style={styles.repeatBtn} onPress={repeatInstruction}>
+          <TouchableOpacity
+            style={styles.repeatBtn}
+            onPress={() => repeatInstruction()}
+            onPressIn={() => console.log("DEBUG: onPressIn fired")}
+            onLongPress={() => {
+              console.log("DEBUG: onLongPress fired (force speak)");
+              try {
+                // force speak the current instruction as last resort
+                const steps = routeData?.steps ?? [];
+                const s = steps[Math.max(0, Math.min(steps.length - 1, currentStepIndex))];
+                const text = s?.instruction ?? "Proceed to destination";
+                Speech.speak(text);
+                Alert.alert("DEBUG", "Forced speak triggered");
+              } catch (e) {
+                console.warn("DEBUG: forced speak error", e);
+              }
+            }}
+          >
             <Text style={{ color: "#fff", fontWeight: "700" }}>Repeat</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.repeatBtn, { marginTop: 8, backgroundColor: "#28a745" }]}
+            onPress={() => {
+              // manual next step
+              if (!routeData?.steps || routeData.steps.length === 0) return;
+              setCurrentStepIndex((idx) => {
+                const last = routeData.steps.length - 1;
+                const next = Math.min(last, idx + 1);
+                const step = routeData.steps[next];
+                if (step?.instruction) {
+                  Speech.speak(step.instruction, { rate: settings.slowTts ? 0.85 : 1 });
+                }
+                return next;
+              });
+            }}
+          >
+            <Text style={{ color: "#fff", fontWeight: "700" }}>Next</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -332,6 +568,7 @@ function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
 }
 
 const styles = StyleSheet.create({
+  debugBtn: { backgroundColor: "#007AFF", padding: 8, borderRadius: 8, marginTop: 6 },
   container: { flex: 1 },
   map: { flex: 1 },
   topControls: {

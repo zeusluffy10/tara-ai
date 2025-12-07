@@ -5,11 +5,24 @@ import { StackScreenProps } from "@react-navigation/stack";
 import { useSeniorMode } from "../context/SeniorModeContext";
 import EmergencyShare from "../components/EmergencyShare";
 import { RootStackParamList } from "../types/navigation";
+import { Audio } from "expo-av";
 
 type Props = StackScreenProps<RootStackParamList, "SeniorModeHome">;
 
 export default function SeniorModeHome({ navigation }: Props) {
   const { settings, setSettings } = useSeniorMode();
+
+  async function playBeep() {
+    try {
+      const { sound } = await Audio.Sound.createAsync(
+        require("../assets/beep.wav"), 
+        { shouldPlay: true, volume: 1.0 }
+      );
+      console.log("DEBUG: beep played");
+    } catch (e) {
+      console.warn("DEBUG: beep failed", e);
+    }
+  }
 
   return (
     <SafeAreaView style={[styles.container, settings.highContrast && { backgroundColor: "#000" }]}>
@@ -54,6 +67,15 @@ export default function SeniorModeHome({ navigation }: Props) {
           <View style={styles.row}>
             <Text>Auto repeat when stopped</Text>
             <Switch value={settings.autoRepeat} onValueChange={(v) => setSettings({ autoRepeat: v })} />
+          </View>
+
+          <View style={styles.row}>
+            <TouchableOpacity
+              style={{ backgroundColor: "black", padding: 12, borderRadius: 8, marginTop: 20 }}
+              onPress={playBeep}
+            >
+              <Text style={{ color: "white" }}>Play Beep Test</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </View>

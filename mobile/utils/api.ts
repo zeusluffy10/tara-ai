@@ -1,4 +1,4 @@
-const API_BASE = "https://quarter-wells-stopped-hoping.trycloudflare.com";
+const API_BASE = "https://maple-settled-abs-inn.trycloudflare.com";
 export default API_BASE; // process.env.EXPO_PUBLIC_API_BASE || "http://192.168.110.210:8000";
 
 export async function getJSON<T = any>(path: string): Promise<T> {
