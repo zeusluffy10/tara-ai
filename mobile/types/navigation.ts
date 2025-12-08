@@ -4,4 +4,5 @@ export type RootStackParamList = {
   VoiceConfirm: { text: string };
   SearchNavigateFlow: { initialQuery?: string; origin?: string } | undefined;
   NavigationMapScreen: { routeData: any };
+  VoiceSettings: undefined;
 };

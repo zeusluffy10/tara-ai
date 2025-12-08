@@ -12,17 +12,6 @@ type Props = StackScreenProps<RootStackParamList, "SeniorModeHome">;
 export default function SeniorModeHome({ navigation }: Props) {
   const { settings, setSettings } = useSeniorMode();
 
-  async function playBeep() {
-    try {
-      const { sound } = await Audio.Sound.createAsync(
-        require("../assets/beep.wav"), 
-        { shouldPlay: true, volume: 1.0 }
-      );
-      console.log("DEBUG: beep played");
-    } catch (e) {
-      console.warn("DEBUG: beep failed", e);
-    }
-  }
 
   return (
     <SafeAreaView style={[styles.container, settings.highContrast && { backgroundColor: "#000" }]}>
@@ -71,10 +60,10 @@ export default function SeniorModeHome({ navigation }: Props) {
 
           <View style={styles.row}>
             <TouchableOpacity
-              style={{ backgroundColor: "black", padding: 12, borderRadius: 8, marginTop: 20 }}
-              onPress={playBeep}
+              onPress={() => navigation.navigate("VoiceSettings" as never)}
+              style={{ marginTop: 12, backgroundColor:"#007bff", padding:12, borderRadius:10 }}
             >
-              <Text style={{ color: "white" }}>Play Beep Test</Text>
+              <Text style={{ color:"#fff", fontWeight:"700", textAlign:"center" }}>Voice Settings</Text>
             </TouchableOpacity>
           </View>
         </View>

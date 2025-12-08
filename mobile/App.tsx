@@ -1,3 +1,13 @@
+// ---- GLOBAL POLYFILLS FOR MP3 BASE64 ----
+import { Buffer } from "buffer";
+(global as any).Buffer = Buffer;
+
+// Add btoa polyfill if missing (needed for base64 encoding in tts_server.ts)
+if (typeof (global as any).btoa !== "function") {
+  (global as any).btoa = (str: string) => Buffer.from(str, "binary").toString("base64");
+}
+// ------------------------------------------
+
 import * as React from "react";
 import { useEffect } from "react";
 import { View, Text, TouchableOpacity, StyleSheet, Platform } from "react-native";
@@ -11,6 +21,7 @@ import VoiceRecorderScreen from "./screens/VoiceRecorderScreen";
 import VoiceConfirmScreen from "./screens/VoiceConfirmScreen";
 import SearchNavigateFlow from "./screens/SearchNavigateFlow";
 import NavigationMapScreen from "./screens/NavigationMapScreen";
+import VoiceSettingsScreen from "./screens/VoiceSettingsScreen";
 import { SeniorModeProvider } from "./context/SeniorModeContext";
 
 import { Audio } from "expo-av";
@@ -72,6 +83,7 @@ export default function App() {
           <Stack.Screen name="VoiceConfirm" component={VoiceConfirmScreen} options={{ title: "Confirm Destination" }} />
           <Stack.Screen name="SearchNavigateFlow" component={SearchNavigateFlow} />
           <Stack.Screen name="NavigationMapScreen" component={NavigationMapScreen} />
+          <Stack.Screen name="VoiceSettings" component={VoiceSettingsScreen} />
         </Stack.Navigator>
 
         {/* Floating debug button — easy test anywhere in the app */}

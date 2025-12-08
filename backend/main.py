@@ -1,8 +1,14 @@
+from dotenv import load_dotenv
+load_dotenv()
 from fastapi import FastAPI, Query, HTTPException, File, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional, Tuple
 import html
+from routes.navigation import router as navigation_router
+from routes.tts import router as tts_router
+from routes.tts_job import router as tts_job_router
+
 
 # new imports for /transcribe
 import os
@@ -19,6 +25,9 @@ from utils.maps_client import (
 )
 
 app = FastAPI()
+app.include_router(tts_job_router)
+app.include_router(navigation_router)
+app.include_router(tts_router)
 
 
 class Question(BaseModel):
@@ -38,8 +47,11 @@ class SimplifyPayload(BaseModel):
 #     return html.unescape(clean).strip()
 
 def _strip_html_tags(s: str) -> str:
-    text = _re.sub(r"<[^>]+>", "", s or "")
-    return _html.unescape(text).strip()
+    """Remove HTML tags and unescape entities."""
+    if not s:
+        return ""
+    clean = re.sub(r"<[^>]+>", "", s)
+    return html.unescape(clean).strip()
 
 def _get_latlng_from_loc(loc: dict) -> Tuple[float, float]:
     """Extract lat/lng from a Google location dict {lat: .., lng: ..}"""
@@ -345,7 +357,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
             data = {"model": "whisper-1"}
             headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
             resp = requests.post("https://api.openai.com/v1/audio/transcriptions",
-                                 headers=headers, files=files, data=data, timeout=60)
+                                 headers=headers, files=files, data=data, timeout=240)
 
         if resp.status_code != 200:
             # surface OpenAI error
