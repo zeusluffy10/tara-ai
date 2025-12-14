@@ -7,6 +7,8 @@ type SeniorSettings = {
   slowTts: boolean;
   autoRepeat: boolean;
   repeatDelaySec: number; // seconds to wait when stopped before repeating
+  voiceRate: number;   // 0.7 – 1.3 (speed)
+  voiceVolume: number; // 0.5 – 1.0 (loudness)
 };
 
 const defaultSettings: SeniorSettings = {
@@ -15,6 +17,8 @@ const defaultSettings: SeniorSettings = {
   slowTts: true,
   autoRepeat: true,
   repeatDelaySec: 5,
+  voiceRate: 1.0,
+  voiceVolume: 1.0,
 };
 
 type ContextProps = {

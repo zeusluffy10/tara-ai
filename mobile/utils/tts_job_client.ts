@@ -3,7 +3,7 @@ import { playServerTTS } from "./tts_server"; // we'll reuse its download+play i
 import * as FileSystem from "expo-file-system";
 import { Audio } from "expo-av";
 
-const BASE = "https://faster-touched-workplace-airline.trycloudflare.com"; // replace with your public/tunnel or LAN base
+const BASE = "https://lying-liable-wales-led.trycloudflare.com"; // replace with your public/tunnel or LAN base
 
 export async function startTtsJob(text: string, voice?: string) {
   const resp = await fetch(`${BASE}/tts`, {

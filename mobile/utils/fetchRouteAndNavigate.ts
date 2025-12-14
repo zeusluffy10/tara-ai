@@ -1,7 +1,7 @@
 // mobile/utils/fetchRouteAndNavigate.ts
 import { Alert } from "react-native";
 
-const API_BASE = "https://faster-touched-workplace-airline.trycloudflare.com";
+const API_BASE = "https://lying-liable-wales-led.trycloudflare.com";
 
 export async function fetchRouteAndNavigate(origin: string, destination: string, navigation: any) {
   try {

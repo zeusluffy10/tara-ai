@@ -63,7 +63,13 @@ async function playBeep() {
 
 export default function App() {
   useEffect(() => {
-    enablePlaybackInSilentMode();
+    Audio.setAudioModeAsync({
+      allowsRecordingIOS: false,
+      staysActiveInBackground: true, // ✅ background audio
+      playsInSilentModeIOS: true,    // ✅ silent switch override
+      shouldDuckAndroid: false,
+      playThroughEarpieceAndroid: false,
+    }).catch(console.warn);
   }, []);
 
   const debugRepeat = async () => {
