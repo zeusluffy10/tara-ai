@@ -14,31 +14,17 @@ import { useSeniorMode } from "../context/SeniorModeContext";
 
 type Props = StackScreenProps<RootStackParamList, "VoiceConfirm">;
 
-let soundRef: Audio.Sound | null = null;
+let sound: Audio.Sound | null = null;
 
 async function playLOUD(text: string) {
-  // stop previous audio
-  if (soundRef) {
+  // stop previous sound
+  if (sound) {
     try {
-      await soundRef.stopAsync();
-      await soundRef.unloadAsync();
+      await sound.stopAsync();
+      await sound.unloadAsync();
     } catch {}
-    soundRef = null;
+    sound = null;
   }
-
-  // 🔴 IMPORTANT: use LOCAL IP (no Cloudflare for now)
-  const res = await fetch("https://lying-liable-wales-led.trycloudflare.com/tts", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
-  });
-
-  if (!res.ok) {
-    throw new Error("TTS server error");
-  }
-
-  const buffer = await res.arrayBuffer();
-  const base64Audio = Buffer.from(buffer).toString("base64");
 
   await Audio.setAudioModeAsync({
     playsInSilentModeIOS: true,
@@ -47,15 +33,20 @@ async function playLOUD(text: string) {
     shouldDuckAndroid: false,
   });
 
-  const { sound } = await Audio.Sound.createAsync(
-    { uri: `data:audio/mpeg;base64,${base64Audio}` },
+  // 🔴 IMPORTANT: stream directly from backend
+  const url =
+    "https://lying-liable-wales-led.trycloudflare.com/tts?text=" +
+    encodeURIComponent(text);
+
+  const result = await Audio.Sound.createAsync(
+    { uri: url },
     {
       shouldPlay: true,
-      volume: 1.0, // 🔊 MAX LOUD
+      volume: 1.0, // 🔊 MAX
     }
   );
 
-  soundRef = sound;
+  sound = result.sound;
 }
 
 export default function VoiceConfirmScreen({ route, navigation }: Props) {
@@ -102,7 +93,10 @@ export default function VoiceConfirmScreen({ route, navigation }: Props) {
           </TouchableOpacity>
         </View>
 
-        <TouchableOpacity style={styles.loudBtn} onPress={() => playLOUD(text)}>
+        <TouchableOpacity
+          style={styles.loudBtn}
+          onPress={() => playLOUD(`Okay. Dadalhin kita sa ${text}.`)}
+        >
           <Text style={styles.loudText}>🔊 Play Loud</Text>
         </TouchableOpacity>
       </View>

@@ -12,7 +12,7 @@ export async function speakLoudFromServer(text: string) {
     currentSound = null;
   }
 
-  const res = await fetch("https://lying-liable-wales-led.trycloudflare.com/tts", {
+  const res = await fetch("https://catalogs-figures-soil-conventions.trycloudflare.com/tts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text }),

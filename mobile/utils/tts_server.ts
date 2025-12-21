@@ -6,7 +6,7 @@ import { Audio } from "expo-av";
  * Configure this to point to your FastAPI TTS endpoint (use your PC LAN IP).
  * Example: "http://192.168.110.210:8000/tts"
  */
-const BACKEND_TTS_URL = "https://lying-liable-wales-led.trycloudflare.com/tts";
+const BACKEND_TTS_URL = "https://catalogs-figures-soil-conventions.trycloudflare.com/tts";
 
 /** TS-safe: get a writable cache/document directory */
 function getCacheDirectory(): string {

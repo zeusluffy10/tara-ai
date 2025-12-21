@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Response
 from pydantic import BaseModel
+from fastapi import APIRouter, Query
+from fastapi.responses import Response
 from services.tts_service import generate_tts_audio
 
 router = APIRouter()
@@ -8,7 +9,16 @@ class TTSRequest(BaseModel):
     text: str
     voice: str = "alloy"
 
-@router.post("/tts", response_class=Response)
-async def tts_endpoint(body: TTSRequest):
-    audio_mp3 = await generate_tts_audio(body.text, body.voice)
-    return Response(content=audio_mp3, media_type="audio/mpeg")
+
+@router.get("/tts")
+def tts(text: str = Query(...)):
+    audio_bytes = generate_tts_audio(text)
+
+    return Response(
+        content=audio_bytes,
+        media_type="audio/mpeg",
+        headers={
+            "Cache-Control": "no-store",
+            "Accept-Ranges": "bytes"
+        }
+    )
