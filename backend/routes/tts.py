@@ -6,9 +6,9 @@ from services.tts_service import generate_tts_audio
 router = APIRouter()
 
 @router.get("/tts")
-def tts(text: str = Query(...)):
+async def tts(text: str = Query(...)):
     try:
-        audio_bytes = generate_tts_audio(text)
+        audio_bytes = await generate_tts_audio(text)  # 🔥 FIX
 
         if not audio_bytes:
             raise ValueError("TTS returned no audio")
