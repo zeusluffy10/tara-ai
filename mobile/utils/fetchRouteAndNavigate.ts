@@ -1,7 +1,7 @@
 // mobile/utils/fetchRouteAndNavigate.ts
 import { Alert } from "react-native";
 
-const API_BASE = "https://catalogs-figures-soil-conventions.trycloudflare.com";
+const API_BASE = "https://tara-ai-backend-swbp.onrender.com";
 
 export async function fetchRouteAndNavigate(origin: string, destination: string, navigation: any) {
   try {

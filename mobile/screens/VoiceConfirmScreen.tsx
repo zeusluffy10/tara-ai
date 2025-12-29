@@ -35,7 +35,7 @@ async function playLOUD(text: string) {
 
   // 🔴 IMPORTANT: stream directly from backend
   const url =
-    "https://lying-liable-wales-led.trycloudflare.com/tts?text=" +
+    "https://tara-ai-backend-swbp.onrender.com/tts?text=" +
     encodeURIComponent(text);
 
   const result = await Audio.Sound.createAsync(
