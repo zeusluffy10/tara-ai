@@ -11,6 +11,7 @@ import { StackScreenProps } from "@react-navigation/stack";
 import { Audio } from "expo-av";
 import { RootStackParamList } from "../types/navigation";
 import { useSeniorMode } from "../context/SeniorModeContext";
+import { unlockAudio } from "../utils/audioUnlock";
 
 type Props = StackScreenProps<RootStackParamList, "VoiceConfirm">;
 
@@ -59,6 +60,7 @@ export default function VoiceConfirmScreen({ route, navigation }: Props) {
 
   async function confirm() {
     try {
+      await unlockAudio();
       await playLOUD(`Okay. Dadalhin kita sa ${text}.`);
       navigation.navigate("SearchNavigateFlow", { initialQuery: text });
     } catch (e) {

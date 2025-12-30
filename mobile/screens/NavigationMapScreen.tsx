@@ -1,5 +1,3 @@
-// mobile/screens/NavigationMapScreen.tsx
-
 import React, { useEffect, useRef, useState } from "react";
 import {
   View,
@@ -22,6 +20,7 @@ import decodePolyline from "../utils/polylineDecode";
 import { RootStackParamList } from "../types/navigation";
 import { speakLoud } from "../utils/tts_loud";
 import { filipinoNavigator } from "../utils/filipinoNavigator";
+import { getLandmarkName } from "../utils/landmark";
 
 type Props = StackScreenProps<
   RootStackParamList,
@@ -34,6 +33,9 @@ export default function NavigationMapScreen({ route }: Props) {
   const mapRef = useRef<MapView | null>(null);
   const watchRef = useRef<Location.LocationSubscription | null>(null);
 
+  const announcedRef = useRef<boolean>(false);
+  const offRouteRef = useRef<boolean>(false);
+
   const [polyCoords, setPolyCoords] = useState<LatLng[]>([]);
   const [userPos, setUserPos] = useState<LatLng | null>(null);
   const [stepIndex, setStepIndex] = useState(0);
@@ -41,6 +43,8 @@ export default function NavigationMapScreen({ route }: Props) {
 
   const steps = routeData?.steps ?? [];
   const destination = routeData?.destination;
+  const [currentLandmark, setCurrentLandmark] =
+    useState<string | null>(null);
 
   // ===========================
   // INIT
@@ -53,13 +57,13 @@ export default function NavigationMapScreen({ route }: Props) {
       // Fit map to route
       setTimeout(() => {
         mapRef.current?.fitToCoordinates(decoded, {
-          edgePadding: { top: 80, bottom: 260, left: 60, right: 60 },
+          edgePadding: { top: 80, bottom: 280, left: 60, right: 60 },
           animated: true,
         });
       }, 600);
     }
 
-    // Speak FIRST instruction
+    // Speak first instruction
     if (steps.length > 0) {
       speakStep(0);
     }
@@ -67,6 +71,30 @@ export default function NavigationMapScreen({ route }: Props) {
     startLocationWatch();
     return stopLocationWatch;
   }, []);
+
+  useEffect(() => {
+    const step = steps[stepIndex];
+
+    console.warn("STEP DEBUG:", step);
+
+    if (!step?.lat || !step?.lng) {
+      console.warn("NO STEP COORDS");
+      return;
+    }
+
+    setCurrentLandmark(null);
+
+    getLandmarkName(step.lat, step.lng)
+      .then((name) => {
+        console.warn("LANDMARK FOUND:", name);
+        setCurrentLandmark(name);
+      })
+      .catch((err) => {
+        console.warn("LANDMARK ERROR:", err.message);
+        setCurrentLandmark(null);
+      });
+  }, [stepIndex]);
+
 
   // ===========================
   // LOCATION
@@ -76,7 +104,7 @@ export default function NavigationMapScreen({ route }: Props) {
       await Location.requestForegroundPermissionsAsync();
 
     if (status !== "granted") {
-      Alert.alert("Permission required", "Location permission needed.");
+      Alert.alert("Permission required", "Location is needed.");
       return;
     }
 
@@ -91,8 +119,11 @@ export default function NavigationMapScreen({ route }: Props) {
           latitude: pos.coords.latitude,
           longitude: pos.coords.longitude,
         };
+
         setUserPos(newPos);
         updateEta(newPos, pos.coords.speed ?? 0);
+        handleDistanceAnnouncements(newPos);
+        detectOffRoute(newPos);
       }
     );
   }
@@ -109,12 +140,95 @@ export default function NavigationMapScreen({ route }: Props) {
     const step = steps[index];
     if (!step?.instruction) return;
 
-    const polished = filipinoNavigator(
-      step.instruction,
+    announcedRef.current = false;
+
+    const landmarkPrefix = currentLandmark
+      ? `Pag lampas ng ${currentLandmark}, `
+      : "";
+
+    const spoken = filipinoNavigator(
+      landmarkPrefix + step.instruction,
       distance
     );
 
-    speakLoud(polished);
+    speakLoud(spoken);
+  }
+
+
+  // ===========================
+  // DISTANCE ALERTS
+  // ===========================
+  function handleDistanceAnnouncements(pos: LatLng) {
+    const step = steps[stepIndex];
+    if (!step?.end_location || announcedRef.current) return;
+
+    const d = haversine(
+      pos.latitude,
+      pos.longitude,
+      step.end_location.lat,
+      step.end_location.lng
+    );
+
+    if (d < 60 && d > 25) {
+      const preview = filipinoNavigator(step.instruction, d);
+      const landmarkPrefix = currentLandmark
+        ? `Pag lampas ng ${currentLandmark}, `
+        : "";
+
+      speakLoud(
+        `Sa ${Math.round(d)} metro, ${landmarkPrefix}${preview}`
+      );
+      announcedRef.current = true;
+    }
+
+    if (d < 15) {
+      speakStep(stepIndex);
+      announcedRef.current = true;
+    }
+  }
+
+  // ===========================
+  // OFF-ROUTE DETECTION
+  // ===========================
+  function detectOffRoute(pos: LatLng) {
+    if (polyCoords.length === 0) return;
+
+    const nearest = polyCoords.reduce((min, p) => {
+      const d = haversine(
+        pos.latitude,
+        pos.longitude,
+        p.latitude,
+        p.longitude
+      );
+      return d < min ? d : min;
+    }, Infinity);
+
+    if (nearest > 40 && !offRouteRef.current) {
+      speakLoud("Mukhang naligaw ka. Sandali lang.");
+      offRouteRef.current = true;
+    }
+
+    if (nearest < 20) {
+      offRouteRef.current = false;
+    }
+  }
+
+  // ===========================
+  // ETA
+  // ===========================
+  function updateEta(pos: LatLng, speed: number) {
+    if (!destination) return;
+
+    const dist = haversine(
+      pos.latitude,
+      pos.longitude,
+      destination.lat,
+      destination.lng
+    );
+
+    const effectiveSpeed = speed > 0.6 ? speed : 1.3;
+    const mins = Math.max(1, Math.round(dist / effectiveSpeed / 60));
+    setEta(`${mins} min`);
   }
 
   // ===========================
@@ -128,33 +242,24 @@ export default function NavigationMapScreen({ route }: Props) {
       setStepIndex(next);
       speakStep(next);
     } else {
-      // Repeat last instruction
       speakStep(stepIndex);
     }
+  }
+
+  // ===========================
+  // UI HELPERS
+  // ===========================
+  function getTurnArrow(maneuver?: string) {
+    if (!maneuver) return "⬆️";
+    if (maneuver.includes("left")) return "⬅️";
+    if (maneuver.includes("right")) return "➡️";
+    if (maneuver.includes("uturn")) return "⤴️";
+    return "⬆️";
   }
 
   const isLastStep = stepIndex >= steps.length - 1;
   const currentInstruction =
     steps[stepIndex]?.instruction ?? "Magpatuloy";
-
-  // ===========================
-  // ETA (ALWAYS SHOWS)
-  // ===========================
-  function updateEta(pos: LatLng, speed: number) {
-    if (!destination) return;
-
-    const dist = haversine(
-      pos.latitude,
-      pos.longitude,
-      destination.lat,
-      destination.lng
-    );
-
-    const effectiveSpeed = speed > 0.6 ? speed : 1.3; // walking fallback
-    const mins = Math.max(1, Math.round(dist / effectiveSpeed / 60));
-
-    setEta(`${mins} min`);
-  }
 
   // ===========================
   // CAMERA FOLLOW
@@ -170,7 +275,7 @@ export default function NavigationMapScreen({ route }: Props) {
   }, [userPos]);
 
   // ===========================
-  // UI
+  // RENDER
   // ===========================
   return (
     <View style={styles.container}>
@@ -200,16 +305,15 @@ export default function NavigationMapScreen({ route }: Props) {
       </MapView>
 
       <View style={styles.bottomCard}>
-        <Text style={styles.label}>Susunod:</Text>
-        <Text style={styles.instruction}>
-          {currentInstruction}
+        <Text style={styles.arrow}>
+          {getTurnArrow(steps[stepIndex]?.maneuver)}
         </Text>
+
+        <Text style={styles.label}>Susunod:</Text>
+        <Text style={styles.instruction}>{currentInstruction}</Text>
         <Text style={styles.eta}>ETA: {eta}</Text>
 
-        <TouchableOpacity
-          style={styles.btn}
-          onPress={handleNext}
-        >
+        <TouchableOpacity style={styles.btn} onPress={handleNext}>
           <Text style={styles.btnText}>
             {isLastStep ? "Repeat" : "Next"}
           </Text>
@@ -259,6 +363,13 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     elevation: 4,
   },
+
+  arrow: {
+    fontSize: 48,
+    textAlign: "center",
+    marginBottom: 6,
+  },
+
   label: { fontWeight: "800", marginBottom: 6 },
   instruction: { fontSize: 16, marginBottom: 6 },
   eta: { color: "#555", marginBottom: 10 },
