@@ -41,10 +41,17 @@ export default function NavigationMapScreen({ route }: Props) {
   const [stepIndex, setStepIndex] = useState(0);
   const [eta, setEta] = useState("1 min");
 
-  const steps = routeData?.steps ?? [];
   const destination = routeData?.destination;
   const [currentLandmark, setCurrentLandmark] =
     useState<string | null>(null);
+  const [currentSteps, setCurrentSteps] = useState<any[]>(
+    routeData?.steps ?? []
+  );
+
+  const [currentPolyline, setCurrentPolyline] = useState<LatLng[]>([]);
+  const steps = currentSteps;
+  const lastRerouteRef = useRef<number>(0);
+  const REROUTE_COOLDOWN_MS = 20_000; // 20 seconds
 
   // ===========================
   // INIT
@@ -52,7 +59,10 @@ export default function NavigationMapScreen({ route }: Props) {
   useEffect(() => {
     if (routeData?.polyline) {
       const decoded = decodePolyline(routeData.polyline);
+
+      // 🔹 initialize BOTH polylines
       setPolyCoords(decoded);
+      setCurrentPolyline(decoded);
 
       // Fit map to route
       setTimeout(() => {
@@ -63,14 +73,16 @@ export default function NavigationMapScreen({ route }: Props) {
       }, 600);
     }
 
-    // Speak first instruction
-    if (steps.length > 0) {
+    // 🔹 initialize steps state
+    if (routeData?.steps?.length) {
+      setCurrentSteps(routeData.steps);
       speakStep(0);
     }
 
     startLocationWatch();
     return stopLocationWatch;
   }, []);
+
 
   useEffect(() => {
     const step = steps[stepIndex];
@@ -128,9 +140,71 @@ export default function NavigationMapScreen({ route }: Props) {
     );
   }
 
+  async function rerouteFromPosition(pos: LatLng) {
+    if (!destination) return;
+
+    try {
+      speakLoud("Sandali lang, inaayos ko ulit ang daan.");
+
+      const res = await fetch(
+        `https://tara-ai-backend-swbp.onrender.com/reroute?origin_lat=${pos.latitude}&origin_lng=${pos.longitude}&dest_lat=${destination.lat}&dest_lng=${destination.lng}`
+      );
+
+      const data = await res.json();
+
+      if (!data?.routes?.length) {
+        speakLoud("Pasensya na, hindi ako makahanap ng bagong daan.");
+        return;
+      }
+
+      const route = data.routes[0];
+
+      const newPolyline = decodePolyline(
+        route.overview_polyline.points
+      );
+
+      setPolyCoords(newPolyline);
+      setCurrentPolyline(newPolyline);
+
+      const newSteps = route.legs[0].steps.map((s: any) => ({
+        instruction: s.html_instructions.replace(/<[^>]+>/g, ""),
+        maneuver: s.maneuver,
+        lat: s.end_location.lat,
+        lng: s.end_location.lng,
+      }));
+
+      setCurrentSteps(newSteps);
+      setStepIndex(0);
+
+      speakLoud("Okay na. Sundan mo ulit ang bagong direksyon.");
+
+      // Fit map to new route
+      setTimeout(() => {
+        mapRef.current?.fitToCoordinates(newPolyline, {
+          edgePadding: { top: 80, bottom: 280, left: 60, right: 60 },
+          animated: true,
+        });
+      }, 600);
+    } catch (e) {
+      speakLoud("May problema sa pagkuha ng bagong daan.");
+    }
+  }
+
+
   function stopLocationWatch() {
     watchRef.current?.remove();
     watchRef.current = null;
+  }
+
+  function getFallbackPrefix() {
+    const phrases = [
+      "Sa susunod na kanto, ",
+      "Bandang unahan, ",
+      "Pagdating sa kanto, ",
+      "Malapit na sa kanto, ",
+    ];
+
+    return phrases[Math.floor(Math.random() * phrases.length)];
   }
 
   // ===========================
@@ -142,12 +216,12 @@ export default function NavigationMapScreen({ route }: Props) {
 
     announcedRef.current = false;
 
-    const landmarkPrefix = currentLandmark
+    const prefix = currentLandmark
       ? `Pag lampas ng ${currentLandmark}, `
-      : "";
+      : getFallbackPrefix();
 
     const spoken = filipinoNavigator(
-      landmarkPrefix + step.instruction,
+      prefix + step.instruction,
       distance
     );
 
@@ -203,9 +277,16 @@ export default function NavigationMapScreen({ route }: Props) {
       return d < min ? d : min;
     }, Infinity);
 
-    if (nearest > 40 && !offRouteRef.current) {
-      speakLoud("Mukhang naligaw ka. Sandali lang.");
+    const now = Date.now();
+
+    if (
+      nearest > 40 &&
+      !offRouteRef.current &&
+      now - lastRerouteRef.current > REROUTE_COOLDOWN_MS
+    ) {
       offRouteRef.current = true;
+      lastRerouteRef.current = now;
+      rerouteFromPosition(pos);
     }
 
     if (nearest < 20) {
@@ -317,6 +398,18 @@ export default function NavigationMapScreen({ route }: Props) {
           <Text style={styles.btnText}>
             {isLastStep ? "Repeat" : "Next"}
           </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[
+            styles.btn,
+            { backgroundColor: "#FF3B30", marginTop: 8 }
+          ]}
+          onPress={() => {
+            if (!userPos) return;
+            rerouteFromPosition(userPos);
+          }}
+        >
+          <Text style={styles.btnText}>Force Reroute</Text>
         </TouchableOpacity>
       </View>
     </View>
