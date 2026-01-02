@@ -8,6 +8,7 @@ import html
 from routes.navigation import router as navigation_router
 from routes.tts import router as tts_router
 from routes.tts_job import router as tts_job_router
+from routes.landmark import router as landmark_router
 
 
 # new imports for /transcribe
@@ -28,6 +29,7 @@ app = FastAPI()
 app.include_router(tts_job_router)
 app.include_router(navigation_router)
 app.include_router(tts_router)
+app.include_router(landmark_router)
 
 
 class Question(BaseModel):
