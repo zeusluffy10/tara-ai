@@ -1,3 +1,11 @@
+from fastapi import APIRouter
+import requests
+import os
+
+router = APIRouter()
+
+GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
+
 @router.get("/reroute")
 def reroute(
     origin_lat: float,
