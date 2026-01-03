@@ -1,41 +1,112 @@
-// mobile/context/SeniorModeContext.tsx
-import React, { createContext, useContext, useState, ReactNode } from "react";
+import React, {
+  createContext,
+  useContext,
+  useState,
+  ReactNode,
+  useEffect,
+} from "react";
 
-type SeniorSettings = {
+/**
+ * Senior accessibility settings
+ */
+export type SeniorSettings = {
   highContrast: boolean;
   bigText: boolean;
-  slowTts: boolean;
+  slowTts: boolean;        // preference (ignored when seniorMode = true)
   autoRepeat: boolean;
-  repeatDelaySec: number; // seconds to wait when stopped before repeating
-  voiceRate: number;   // 0.7 – 1.3 (speed)
-  voiceVolume: number; // 0.5 – 1.0 (loudness)
+  repeatDelaySec: number;
+  voiceRate: number;      // used only when seniorMode = false
+  voiceVolume: number;
 };
 
+/**
+ * Defaults for seniors
+ */
 const defaultSettings: SeniorSettings = {
   highContrast: false,
   bigText: true,
   slowTts: true,
   autoRepeat: true,
   repeatDelaySec: 5,
-  voiceRate: 1.0,
+  voiceRate: 0.65,         // senior-safe default
   voiceVolume: 1.0,
 };
 
 type ContextProps = {
+  seniorMode: boolean;                         // 🔒 MASTER SWITCH
+  setSeniorMode: (v: boolean) => void;
+
   settings: SeniorSettings;
   setSettings: (s: Partial<SeniorSettings>) => void;
+
+  /**
+   * Derived values (always safe to use)
+   */
+  effectiveVoiceRate: number;
+  effectiveVoiceVolume: number;
 };
 
 const SeniorModeContext = createContext<ContextProps>({
+  seniorMode: true,
+  setSeniorMode: () => {},
+
   settings: defaultSettings,
   setSettings: () => {},
+
+  effectiveVoiceRate: 0.65,
+  effectiveVoiceVolume: 1.0,
 });
 
-export const SeniorModeProvider = ({ children }: { children: ReactNode }) => {
+export const SeniorModeProvider = ({
+  children,
+}: {
+  children: ReactNode;
+}) => {
+  const [seniorMode, setSeniorMode] = useState<boolean>(true);
   const [settings, setRaw] = useState<SeniorSettings>(defaultSettings);
-  const setSettings = (patch: Partial<SeniorSettings>) => setRaw((s) => ({ ...s, ...patch }));
+
+  const setSettings = (patch: Partial<SeniorSettings>) =>
+    setRaw((s) => ({ ...s, ...patch }));
+
+  /**
+   * 🔒 HARD LOCK: when Senior Mode is ON
+   * - slow voice is forced
+   * - voice rate is locked
+   */
+  useEffect(() => {
+    if (seniorMode) {
+      setRaw((s) => ({
+        ...s,
+        slowTts: true,
+        voiceRate: 0.65,
+      }));
+    }
+  }, [seniorMode]);
+
+  /**
+   * Derived values — ALWAYS use these in TTS
+   */
+  const effectiveVoiceRate = seniorMode
+    ? 0.65
+    : settings.slowTts
+    ? settings.voiceRate
+    : 1.0;
+
+  const effectiveVoiceVolume = settings.voiceVolume;
+
   return (
-    <SeniorModeContext.Provider value={{ settings, setSettings }}>
+    <SeniorModeContext.Provider
+      value={{
+        seniorMode,
+        setSeniorMode,
+
+        settings,
+        setSettings,
+
+        effectiveVoiceRate,
+        effectiveVoiceVolume,
+      }}
+    >
       {children}
     </SeniorModeContext.Provider>
   );

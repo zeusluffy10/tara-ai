@@ -1,19 +1,27 @@
 // mobile/utils/tts_loud.ts
-
 import * as Speech from "expo-speech";
 
 /**
- * Polished Filipino navigation voice
- * Uses English neural voice for clarity
+ * Global voice settings
+ * Senior-friendly by default
  */
-export async function speakLoud(text: string) {
+export type VoiceOptions = {
+  slow?: boolean;
+};
+
+export async function speakLoud(
+  text: string,
+  options?: VoiceOptions
+) {
   try {
     Speech.stop();
 
+    const isSlow = options?.slow ?? false;
+
     Speech.speak(text, {
-      language: "en-US", // IMPORTANT: do NOT use fil-PH
-      rate: 0.80,        // slower = clearer
-      pitch: 0.95,       // calm, authoritative
+      language: "en-US", // clearer than fil-PH
+      rate: isSlow ? 0.65 : 0.80,  // 🧓 ultra-slow vs normal
+      pitch: 0.95,
       volume: 1.0,
     });
   } catch (e) {

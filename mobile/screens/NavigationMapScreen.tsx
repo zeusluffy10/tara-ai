@@ -21,11 +21,15 @@ import { RootStackParamList } from "../types/navigation";
 import { speakLoud } from "../utils/tts_loud";
 import { filipinoNavigator } from "../utils/filipinoNavigator";
 import { getLandmarkName } from "../utils/landmark";
+import { loadSeniorSlowVoice } from "../utils/voiceStore";
+import { useSeniorMode } from "../context/SeniorModeContext";
 
 type Props = StackScreenProps<
   RootStackParamList,
   "NavigationMapScreen"
 >;
+
+type NavMode = "walking" | "driving";
 
 export default function NavigationMapScreen({ route }: Props) {
   const { routeData } = route.params;
@@ -52,19 +56,28 @@ export default function NavigationMapScreen({ route }: Props) {
   const steps = currentSteps;
   const lastRerouteRef = useRef<number>(0);
   const REROUTE_COOLDOWN_MS = 20_000; // 20 seconds
+  const [navMode, setNavMode] = useState<NavMode>("walking");
+
+  const PREVIEW_DISTANCE = navMode === "driving" ? 120 : 60;
+  const FINAL_DISTANCE   = navMode === "driving" ? 40  : 15;
+  const [seniorSlowVoice, setSeniorSlowVoice] = useState(true);
+  const { seniorMode } = useSeniorMode();
 
   // ===========================
   // INIT
   // ===========================
   useEffect(() => {
+    (async () => {
+      const slow = await loadSeniorSlowVoice(); // 👈 ADD
+      setSeniorSlowVoice(slow);                 // 👈 ADD
+    })();
+
     if (routeData?.polyline) {
       const decoded = decodePolyline(routeData.polyline);
 
-      // 🔹 initialize BOTH polylines
       setPolyCoords(decoded);
       setCurrentPolyline(decoded);
 
-      // Fit map to route
       setTimeout(() => {
         mapRef.current?.fitToCoordinates(decoded, {
           edgePadding: { top: 80, bottom: 280, left: 60, right: 60 },
@@ -73,7 +86,6 @@ export default function NavigationMapScreen({ route }: Props) {
       }, 600);
     }
 
-    // 🔹 initialize steps state
     if (routeData?.steps?.length) {
       setCurrentSteps(routeData.steps);
       speakStep(0);
@@ -83,6 +95,11 @@ export default function NavigationMapScreen({ route }: Props) {
     return stopLocationWatch;
   }, []);
 
+  useEffect(() => {
+    if (seniorMode) {
+      setSeniorSlowVoice(true);
+    }
+  }, [seniorMode]);
 
   useEffect(() => {
     const step = steps[stepIndex];
@@ -144,10 +161,11 @@ export default function NavigationMapScreen({ route }: Props) {
     if (!destination) return;
 
     try {
-      speakLoud("Sandali lang, inaayos ko ulit ang daan.");
+      speakGuidance("Sandali lang, inaayos ko ulit ang daan.");
 
       const res = await fetch(
-        `https://tara-ai-backend-swbp.onrender.com/reroute?origin_lat=${pos.latitude}&origin_lng=${pos.longitude}&dest_lat=${destination.lat}&dest_lng=${destination.lng}`
+        `https://tara-ai-backend-swbp.onrender.com/reroute?origin_lat=${pos.latitude}&origin_lng=${pos.longitude}` +
+        `&dest_lat=${destination.lat}&dest_lng=${destination.lng}&mode=${navMode}`
       );
 
       const data = await res.json();
@@ -196,6 +214,10 @@ export default function NavigationMapScreen({ route }: Props) {
     watchRef.current = null;
   }
 
+  function speakGuidance(text: string) {
+    speakLoud(text, { slow: seniorSlowVoice });
+  }
+
   function getFallbackPrefix() {
     const phrases = [
       "Sa susunod na kanto, ",
@@ -225,8 +247,9 @@ export default function NavigationMapScreen({ route }: Props) {
       distance
     );
 
-    speakLoud(spoken);
+    speakGuidance(spoken); // 👈 CHANGE HERE
   }
+
 
 
   // ===========================
@@ -243,23 +266,28 @@ export default function NavigationMapScreen({ route }: Props) {
       step.end_location.lng
     );
 
-    if (d < 60 && d > 25) {
-      const preview = filipinoNavigator(step.instruction, d);
-      const landmarkPrefix = currentLandmark
-        ? `Pag lampas ng ${currentLandmark}, `
-        : "";
+    const landmarkPrefix = currentLandmark
+      ? `Pag lampas ng ${currentLandmark}, `
+      : "";
 
-      speakLoud(
+    // 🔹 Preview announcement (earlier for driving)
+    if (d < PREVIEW_DISTANCE && d > FINAL_DISTANCE) {
+      const preview = filipinoNavigator(step.instruction, d);
+
+      speakGuidance(
         `Sa ${Math.round(d)} metro, ${landmarkPrefix}${preview}`
       );
+
       announcedRef.current = true;
     }
 
-    if (d < 15) {
+    // 🔹 Final instruction (closer for walking, farther for driving)
+    if (d < FINAL_DISTANCE) {
       speakStep(stepIndex);
       announcedRef.current = true;
     }
   }
+
 
   // ===========================
   // OFF-ROUTE DETECTION
@@ -398,18 +426,6 @@ export default function NavigationMapScreen({ route }: Props) {
           <Text style={styles.btnText}>
             {isLastStep ? "Repeat" : "Next"}
           </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[
-            styles.btn,
-            { backgroundColor: "#FF3B30", marginTop: 8 }
-          ]}
-          onPress={() => {
-            if (!userPos) return;
-            rerouteFromPosition(userPos);
-          }}
-        >
-          <Text style={styles.btnText}>Force Reroute</Text>
         </TouchableOpacity>
       </View>
     </View>
