@@ -4,11 +4,14 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  SafeAreaView,
   Alert,
 } from "react-native";
 import { StackScreenProps } from "@react-navigation/stack";
 import { Audio } from "expo-av";
+import { LinearGradient } from "expo-linear-gradient";
+import { Ionicons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
+
 import { RootStackParamList } from "../types/navigation";
 import { useSeniorMode } from "../context/SeniorModeContext";
 import { unlockAudio } from "../utils/audioUnlock";
@@ -17,8 +20,8 @@ type Props = StackScreenProps<RootStackParamList, "VoiceConfirm">;
 
 let sound: Audio.Sound | null = null;
 
+/* 🔊 LOUD TTS (UNCHANGED LOGIC, SAFE) */
 async function playLOUD(text: string) {
-  // stop previous sound
   if (sound) {
     try {
       await sound.stopAsync();
@@ -34,17 +37,13 @@ async function playLOUD(text: string) {
     shouldDuckAndroid: false,
   });
 
-  // 🔴 IMPORTANT: stream directly from backend
   const url =
     "https://tara-ai-backend-swbp.onrender.com/tts?text=" +
     encodeURIComponent(text);
 
   const result = await Audio.Sound.createAsync(
     { uri: url },
-    {
-      shouldPlay: true,
-      volume: 1.0, // 🔊 MAX
-    }
+    { shouldPlay: true, volume: 1.0 }
   );
 
   sound = result.sound;
@@ -60,6 +59,7 @@ export default function VoiceConfirmScreen({ route, navigation }: Props) {
 
   async function confirm() {
     try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
       await unlockAudio();
       await playLOUD(`Okay. Dadalhin kita sa ${text}.`);
       navigation.navigate("SearchNavigateFlow", { initialQuery: text });
@@ -69,62 +69,164 @@ export default function VoiceConfirmScreen({ route, navigation }: Props) {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <LinearGradient
+      colors={["#EAF2FF", "#DDEBFF"]}
+      style={styles.container}
+    >
+      {/* CARD */}
       <View style={styles.card}>
-        <Text style={[styles.question, settings.bigText && { fontSize: 28 }]}>
+        {/* ICON */}
+        <View style={styles.iconCircle}>
+          <Ionicons name="location" size={36} color="#0A84FF" />
+        </View>
+
+        {/* QUESTION */}
+        <Text
+          style={[
+            styles.question,
+            settings.bigText && { fontSize: 30 },
+          ]}
+        >
           Pupunta ka ba sa
         </Text>
 
-        <Text style={[styles.address, settings.bigText && { fontSize: 26 }]}>
+        {/* DESTINATION */}
+        <Text
+          style={[
+            styles.address,
+            settings.bigText && { fontSize: 28 },
+          ]}
+        >
           {text}
         </Text>
 
-        <View style={styles.row}>
+        {/* ACTIONS */}
+        <View style={styles.actions}>
           <TouchableOpacity
-            style={[styles.btn, { backgroundColor: "#28A745" }]}
+            style={[styles.actionBtn, styles.yesBtn]}
             onPress={confirm}
           >
-            <Text style={styles.btnText}>Oo</Text>
+            <Ionicons name="checkmark" size={28} color="#FFF" />
+            <Text style={styles.actionText}>Oo</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.btn, { backgroundColor: "#DC3545" }]}
+            style={[styles.actionBtn, styles.noBtn]}
             onPress={() => navigation.goBack()}
           >
-            <Text style={styles.btnText}>Hindi</Text>
+            <Ionicons name="close" size={28} color="#FFF" />
+            <Text style={styles.actionText}>Hindi</Text>
           </TouchableOpacity>
         </View>
 
+        {/* PLAY LOUD */}
         <TouchableOpacity
           style={styles.loudBtn}
-          onPress={() => playLOUD(`Okay. Dadalhin kita sa ${text}.`)}
+          onPress={() =>
+            playLOUD(`Pupunta ka ba sa ${text}?`)
+          }
         >
-          <Text style={styles.loudText}>🔊 Play Loud</Text>
+          <Ionicons name="volume-high" size={22} color="#0A84FF" />
+          <Text style={styles.loudText}>Play Loud</Text>
         </TouchableOpacity>
       </View>
-    </SafeAreaView>
+    </LinearGradient>
   );
 }
 
+/* ---------------- STYLES ---------------- */
+
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: "center", padding: 16 },
-  card: { padding: 20, borderRadius: 12, alignItems: "center" },
-  question: { fontSize: 20, fontWeight: "700", marginBottom: 12 },
-  address: {
-    fontSize: 20,
-    fontWeight: "600",
-    marginBottom: 18,
+  container: {
+    flex: 1,
+    justifyContent: "center",
+    padding: 20,
+  },
+
+  card: {
+    backgroundColor: "#FFF",
+    borderRadius: 28,
+    padding: 26,
+    alignItems: "center",
+
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.15,
+    shadowRadius: 24,
+    elevation: 10,
+  },
+
+  iconCircle: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: "#E6F0FF",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 20,
+  },
+
+  question: {
+    fontSize: 24,
+    fontWeight: "800",
+    color: "#1C1C1E",
     textAlign: "center",
+    marginBottom: 10,
   },
-  row: { flexDirection: "row", width: "100%", justifyContent: "space-around" },
-  btn: { paddingVertical: 14, paddingHorizontal: 28, borderRadius: 12 },
-  btnText: { color: "#fff", fontSize: 18, fontWeight: "700" },
+
+  address: {
+    fontSize: 22,
+    fontWeight: "600",
+    color: "#0A84FF",
+    textAlign: "center",
+    marginBottom: 26,
+  },
+
+  actions: {
+    flexDirection: "row",
+    width: "100%",
+    justifyContent: "space-between",
+    marginBottom: 20,
+  },
+
+  actionBtn: {
+    flex: 1,
+    height: 64,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    marginHorizontal: 6,
+  },
+
+  yesBtn: {
+    backgroundColor: "#34C759",
+  },
+
+  noBtn: {
+    backgroundColor: "#FF3B30",
+  },
+
+  actionText: {
+    color: "#FFF",
+    fontSize: 22,
+    fontWeight: "700",
+    marginLeft: 8,
+  },
+
   loudBtn: {
-    marginTop: 18,
-    backgroundColor: "#000",
-    paddingVertical: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F0F5FF",
+    paddingVertical: 14,
     paddingHorizontal: 20,
-    borderRadius: 10,
+    borderRadius: 16,
   },
-  loudText: { color: "#fff", fontWeight: "700" },
+
+  loudText: {
+    color: "#0A84FF",
+    fontSize: 18,
+    fontWeight: "600",
+    marginLeft: 8,
+  },
 });

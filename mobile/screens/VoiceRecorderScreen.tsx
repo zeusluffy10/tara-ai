@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   View,
   Text,
@@ -6,17 +6,20 @@ import {
   ActivityIndicator,
   Alert,
   StyleSheet,
-  SafeAreaView,
+  Animated,
 } from "react-native";
-import { Audio } from "expo-av";
-// Use the legacy file-system compatibility layer for SDK 54
-import * as FileSystem from "expo-file-system/legacy";
-import { postMultipart } from "../utils/api";
 import { StackScreenProps } from "@react-navigation/stack";
+import { Audio } from "expo-av";
+import { LinearGradient } from "expo-linear-gradient";
+import * as FileSystem from "expo-file-system/legacy";
+import * as Haptics from "expo-haptics";
+import { Ionicons } from "@expo/vector-icons";
+
+import { postMultipart } from "../utils/api";
 import { RootStackParamList } from "../types/navigation";
 import { useSeniorMode } from "../context/SeniorModeContext";
 
-// cross-platform recording options (works with expo-av)
+/* RECORDING OPTIONS (UNCHANGED, SAFE) */
 const RECORDING_OPTIONS = {
   android: {
     extension: ".m4a",
@@ -46,22 +49,36 @@ const RECORDING_OPTIONS = {
 type Props = StackScreenProps<RootStackParamList, "VoiceRecorder">;
 
 export default function VoiceRecorderScreen({ navigation }: Props) {
+  const { settings } = useSeniorMode();
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [loading, setLoading] = useState(false);
-  const { settings } = useSeniorMode();
+
+  /* PULSE ANIMATION */
+  const pulse = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, {
+          toValue: 1.06,
+          duration: 900,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulse, {
+          toValue: 1,
+          duration: 900,
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
+  }, []);
 
   async function startRecording() {
     try {
       setLoading(true);
-
-      // request permissions (modern API)
       const perm = await Audio.requestPermissionsAsync();
-      if (!perm || perm.status !== "granted") {
-        Alert.alert(
-          "Permission required",
-          "Microphone access is required to record voice."
-        );
-        setLoading(false);
+      if (perm.status !== "granted") {
+        Alert.alert("Permission required", "Microphone access is required.");
         return;
       }
 
@@ -73,9 +90,10 @@ export default function VoiceRecorderScreen({ navigation }: Props) {
       const rec = new Audio.Recording();
       await rec.prepareToRecordAsync(RECORDING_OPTIONS as any);
       await rec.startAsync();
+
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
       setRecording(rec);
     } catch (err) {
-      console.error("startRecording error:", err);
       Alert.alert("Recording error", String(err));
     } finally {
       setLoading(false);
@@ -84,97 +102,158 @@ export default function VoiceRecorderScreen({ navigation }: Props) {
 
   async function stopRecordingAndUpload() {
     if (!recording) return;
+
     setLoading(true);
     try {
       await recording.stopAndUnloadAsync();
       const uri = recording.getURI();
-      if (!uri) throw new Error("No recording URI available");
+      if (!uri) throw new Error("Recording failed");
 
-      // Use legacy FileSystem API (SDK 54 compatibility)
       const fileInfo = await FileSystem.getInfoAsync(uri);
-      if (!fileInfo || !fileInfo.exists) {
-        throw new Error("Recorded file not found: " + uri);
-      }
+      if (!fileInfo.exists) throw new Error("Audio file missing");
 
-      const filename = uri.split("/").pop() || "voice.m4a";
       const formData = new FormData();
-      // @ts-ignore - React Native FormData file object
       formData.append("file", {
         uri,
-        name: filename,
+        name: "voice.m4a",
         type: "audio/m4a",
-      });
+      } as any);
 
       const res = await postMultipart("/transcribe", formData);
-      if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(`Transcribe failed: ${res.status} ${txt}`);
-      }
-
       const data = await res.json();
       const text: string = data.text || "";
 
-      if (text && settings.slowTts) {
-        try {
-          const Speech = await import("expo-speech");
-          Speech.speak(text, { rate: 0.8 });
-        } catch (e) {
-          // ignore if expo-speech unavailable
-        }
-      }
-
       navigation.replace("VoiceConfirm", { text });
     } catch (err: any) {
-      console.error("Upload error:", err);
       Alert.alert("Upload error", err?.message ?? String(err));
     } finally {
-      setLoading(false);
       setRecording(null);
+      setLoading(false);
     }
   }
 
+  const isRecording = !!recording;
+
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.inner}>
-        <Text style={[styles.title, settings.bigText && { fontSize: 22 }]}>
-          Speak destination
+    <LinearGradient colors={["#EAF2FF", "#DDEBFF"]} style={styles.container}>
+      <View style={styles.header}>
+        <Text style={styles.title}>Speak Destination</Text>
+        <Text style={styles.subtitle}>
+          {isRecording
+            ? "Listening… speak clearly"
+            : "Tap the microphone and say where you want to go"}
         </Text>
-
-        <TouchableOpacity
-          onPress={recording ? stopRecordingAndUpload : startRecording}
-          style={[styles.button, recording ? styles.buttonRecording : styles.buttonIdle]}
-          disabled={loading}
-        >
-          {loading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.buttonText}>
-              {recording ? "Stop & Send" : "Start Recording"}
-            </Text>
-          )}
-        </TouchableOpacity>
-
-        <Text style={styles.hint}>
-          {recording
-            ? "Recording… Speak now, then press Stop & Send"
-            : "Press Start and say the destination (short phrase)"}
-        </Text>
-
-        <TouchableOpacity onPress={() => navigation.goBack()} style={{ marginTop: 20 }}>
-          <Text style={{ color: "#007AFF" }}>Cancel</Text>
-        </TouchableOpacity>
       </View>
-    </SafeAreaView>
+
+      {/* HERO MIC */}
+      <View style={styles.heroContainer}>
+        <View style={styles.glow} />
+        <Animated.View style={{ transform: [{ scale: pulse }] }}>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            style={[
+              styles.heroButton,
+              isRecording && styles.heroRecording,
+            ]}
+            disabled={loading}
+            onPress={() => {
+              if (loading) return;
+              isRecording ? stopRecordingAndUpload() : startRecording();
+            }}
+          >
+            {loading ? (
+              <ActivityIndicator color="#fff" size="large" />
+            ) : (
+              <Ionicons
+                name={isRecording ? "stop" : "mic"}
+                size={56}
+                color="#FFF"
+              />
+            )}
+          </TouchableOpacity>
+        </Animated.View>
+      </View>
+
+      {/* ACTION TEXT */}
+      <Text style={styles.actionText}>
+        {isRecording ? "Tap to Stop & Send" : "Tap to Start Recording"}
+      </Text>
+
+      {/* CANCEL */}
+      <TouchableOpacity onPress={() => navigation.goBack()}>
+        <Text style={styles.cancel}>Cancel</Text>
+      </TouchableOpacity>
+    </LinearGradient>
   );
 }
 
+/* ---------------- STYLES ---------------- */
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#fff" },
-  inner: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24 },
-  title: { fontSize: 20, fontWeight: "700", marginBottom: 20 },
-  button: { paddingVertical: 16, paddingHorizontal: 32, borderRadius: 12, minWidth: 220, alignItems: "center" },
-  buttonIdle: { backgroundColor: "#007AFF" },
-  buttonRecording: { backgroundColor: "#DC3545" },
-  buttonText: { color: "#fff", fontSize: 18, fontWeight: "700" },
-  hint: { marginTop: 14, color: "gray", textAlign: "center", maxWidth: 320 },
+  container: {
+    flex: 1,
+    alignItems: "center",
+  },
+
+  header: {
+    marginTop: 50,
+    alignItems: "center",
+    paddingHorizontal: 24,
+  },
+  title: {
+    fontSize: 26,
+    fontWeight: "800",
+    color: "#0A84FF",
+    textAlign: "center",
+  },
+  subtitle: {
+    fontSize: 18,
+    color: "#5F6C80",
+    marginTop: 10,
+    textAlign: "center",
+  },
+
+  heroContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  glow: {
+    position: "absolute",
+    width: 280,
+    height: 280,
+    borderRadius: 140,
+    backgroundColor: "#0A84FF",
+    opacity: 0.18,
+  },
+  heroButton: {
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    backgroundColor: "#0A84FF",
+    alignItems: "center",
+    justifyContent: "center",
+
+    shadowColor: "#0A84FF",
+    shadowOffset: { width: 0, height: 14 },
+    shadowOpacity: 0.45,
+    shadowRadius: 30,
+    elevation: 14,
+  },
+  heroRecording: {
+    backgroundColor: "#FF3B30",
+    shadowColor: "#FF3B30",
+  },
+
+  actionText: {
+    fontSize: 20,
+    fontWeight: "600",
+    color: "#1C1C1E",
+    marginBottom: 24,
+  },
+  cancel: {
+    fontSize: 18,
+    color: "#0A84FF",
+    marginBottom: 40,
+  },
 });

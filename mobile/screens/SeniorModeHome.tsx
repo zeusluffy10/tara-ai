@@ -1,91 +1,292 @@
-// mobile/screens/SeniorModeHome.tsx
-import React from "react";
-import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, Switch } from "react-native";
+import React, { useRef, useEffect } from "react";
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  Switch,
+  Animated,
+} from "react-native";
 import { StackScreenProps } from "@react-navigation/stack";
+import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
+import * as Haptics from "expo-haptics";
+
 import { useSeniorMode } from "../context/SeniorModeContext";
 import EmergencyShare from "../components/EmergencyShare";
 import { RootStackParamList } from "../types/navigation";
-import { Audio } from "expo-av";
 
 type Props = StackScreenProps<RootStackParamList, "SeniorModeHome">;
 
 export default function SeniorModeHome({ navigation }: Props) {
   const { settings, setSettings } = useSeniorMode();
 
+  /* HERO PULSE ANIMATION */
+  const pulse = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, {
+          toValue: 1.06,
+          duration: 900,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulse, {
+          toValue: 1,
+          duration: 900,
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
+  }, []);
 
   return (
-    <SafeAreaView style={[styles.container, settings.highContrast && { backgroundColor: "#000" }]}>
+    <LinearGradient
+      colors={["#EAF2FF", "#DDEBFF"]}
+      style={styles.safe}
+    >
+      {/* HEADER */}
       <View style={styles.header}>
-        <Text style={[styles.appName, settings.highContrast && { color: "#FFD700" }]}>TARA-AI</Text>
-        <Text style={[styles.subtitle, settings.highContrast && { color: "#ccc" }]}>Senior Navigation Mode</Text>
+        <Text style={styles.appName}>TARA-AI</Text>
+        <Text style={styles.subtitle}>Senior Navigation Assistant</Text>
       </View>
 
-      <View style={styles.mainButtons}>
-        <TouchableOpacity
-          style={styles.bigButton}
-          onPress={() => navigation.navigate("VoiceRecorder")}
-        >
-          <Text style={styles.bigButtonText}>🎤 Speak Destination</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.bigButtonAlt}
-          onPress={() => navigation.navigate("SearchNavigateFlow", { initialQuery: "" })}
-        >
-          <Text style={styles.bigButtonTextAlt}>🔍 Type Destination</Text>
-        </TouchableOpacity>
-
-        <View style={{ marginTop: 12 }}>
-          <Text style={{ fontWeight: "700", marginBottom: 8 }}>Accessibility Settings</Text>
-
-          <View style={styles.row}>
-            <Text>High contrast</Text>
-            <Switch value={settings.highContrast} onValueChange={(v) => setSettings({ highContrast: v })} />
-          </View>
-
-          <View style={styles.row}>
-            <Text>Large text</Text>
-            <Switch value={settings.bigText} onValueChange={(v) => setSettings({ bigText: v })} />
-          </View>
-
-          <View style={styles.row}>
-            <Text>Slow speech</Text>
-            <Switch value={settings.slowTts} onValueChange={(v) => setSettings({ slowTts: v })} />
-          </View>
-
-          <View style={styles.row}>
-            <Text>Auto repeat when stopped</Text>
-            <Switch value={settings.autoRepeat} onValueChange={(v) => setSettings({ autoRepeat: v })} />
-          </View>
-
-          <View style={styles.row}>
-            <TouchableOpacity
-              onPress={() => navigation.navigate("VoiceSettings" as never)}
-              style={{ marginTop: 12, backgroundColor:"#007bff", padding:12, borderRadius:10 }}
-            >
-              <Text style={{ color:"#fff", fontWeight:"700", textAlign:"center" }}>Voice Settings</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+      {/* HERO MIC */}
+      <View style={styles.heroContainer}>
+        <View style={styles.glow} />
+        <Animated.View style={{ transform: [{ scale: pulse }] }}>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            style={styles.heroButton}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+              navigation.navigate("VoiceRecorder");
+            }}
+          >
+            <Ionicons name="mic" size={52} color="#FFF" />
+            <Text style={styles.heroText}>Speak Destination</Text>
+          </TouchableOpacity>
+        </Animated.View>
       </View>
 
+      {/* SECONDARY ACTION */}
+      <TouchableOpacity
+        style={styles.secondaryButton}
+        onPress={() =>
+          navigation.navigate("SearchNavigateFlow", { initialQuery: "" })
+        }
+      >
+        <Ionicons name="search" size={22} color="#0A84FF" />
+        <Text style={styles.secondaryText}>Type Destination</Text>
+      </TouchableOpacity>
+
+      {/* ACCESSIBILITY CARD */}
+      <View style={styles.card}>
+        <Text style={styles.sectionTitle}>Accessibility</Text>
+
+        <SettingRow
+          label="High Contrast"
+          value={settings.highContrast}
+          onToggle={(v) => setSettings({ highContrast: v })}
+        />
+        <SettingRow
+          label="Large Text"
+          value={settings.bigText}
+          onToggle={(v) => setSettings({ bigText: v })}
+        />
+        <SettingRow
+          label="Slow Speech"
+          value={settings.slowTts}
+          onToggle={(v) => setSettings({ slowTts: v })}
+        />
+        <SettingRow
+          label="Auto Repeat"
+          value={settings.autoRepeat}
+          onToggle={(v) => setSettings({ autoRepeat: v })}
+        />
+
+        <TouchableOpacity
+          style={styles.voiceSettings}
+          onPress={() => navigation.navigate("VoiceSettings" as never)}
+        >
+          <Ionicons name="volume-high" size={20} color="#0A84FF" />
+          <Text style={styles.voiceSettingsText}>Voice Settings</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* SAFETY FOOTER */}
       <View style={styles.footer}>
         <EmergencyShare />
       </View>
-    </SafeAreaView>
+    </LinearGradient>
   );
 }
 
+/* ---------- SETTING ROW ---------- */
+
+function SettingRow({
+  label,
+  value,
+  onToggle,
+}: {
+  label: string;
+  value: boolean;
+  onToggle: (v: boolean) => void;
+}) {
+  return (
+    <TouchableOpacity
+      style={styles.row}
+      activeOpacity={0.7}
+      onPress={() => onToggle(!value)}
+    >
+      <Text style={styles.rowText}>{label}</Text>
+      <Switch value={value} onValueChange={onToggle} />
+    </TouchableOpacity>
+  );
+}
+
+/* ---------- STYLES ---------- */
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#F5F5F5", paddingHorizontal: 20, paddingTop: 40 },
-  header: { alignItems: "center", marginBottom: 18 },
-  appName: { fontSize: 36, fontWeight: "800", color: "#007AFF" },
-  subtitle: { fontSize: 18, marginTop: 6, color: "#555" },
-  mainButtons: { flex: 1, justifyContent: "flex-start" },
-  bigButton: { backgroundColor: "#007AFF", paddingVertical: 20, borderRadius: 16, marginBottom: 12, alignItems: "center" },
-  bigButtonAlt: { backgroundColor: "#fff", borderWidth: 1, borderColor: "#007AFF", paddingVertical: 18, borderRadius: 12, alignItems: "center" },
-  bigButtonText: { color: "#fff", fontSize: 22, fontWeight: "600" },
-  bigButtonTextAlt: { color: "#007AFF", fontSize: 20, fontWeight: "600" },
-  footer: { paddingBottom: 30, alignItems: "center" },
-  row: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 6 },
+  safe: {
+    flex: 1,
+  },
+
+  /* HEADER */
+  header: {
+    alignItems: "center",
+    marginTop: 24,
+  },
+  appName: {
+    fontSize: 36,
+    fontWeight: "800",
+    color: "#0A84FF",
+    letterSpacing: 1,
+  },
+  subtitle: {
+    fontSize: 18,
+    color: "#5F6C80",
+    marginTop: 6,
+  },
+
+  /* HERO */
+  heroContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+    marginVertical: 28,
+  },
+  glow: {
+    position: "absolute",
+    width: 260,
+    height: 260,
+    borderRadius: 130,
+    backgroundColor: "#0A84FF",
+    opacity: 0.18,
+  },
+  heroButton: {
+    width: 210,
+    height: 210,
+    borderRadius: 105,
+    backgroundColor: "#0A84FF",
+    alignItems: "center",
+    justifyContent: "center",
+
+    shadowColor: "#0A84FF",
+    shadowOffset: { width: 0, height: 14 },
+    shadowOpacity: 0.45,
+    shadowRadius: 30,
+    elevation: 14,
+  },
+  heroText: {
+    marginTop: 12,
+    color: "#FFF",
+    fontSize: 20,
+    fontWeight: "700",
+  },
+
+  /* SECONDARY */
+  secondaryButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#FFF",
+    marginHorizontal: 50,
+    paddingVertical: 16,
+    borderRadius: 18,
+
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  secondaryText: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#0A84FF",
+    marginLeft: 10,
+  },
+
+  /* CARD */
+  card: {
+    backgroundColor: "#FFF",
+    borderRadius: 24,
+    marginTop: 26,
+    marginHorizontal: 16,
+    padding: 16,
+
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.1,
+    shadowRadius: 14,
+    elevation: 6,
+  },
+  sectionTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    marginBottom: 10,
+  },
+  row: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    height: 56,
+  },
+  rowText: {
+    fontSize: 18,
+    fontWeight: "500",
+  },
+
+  /* VOICE SETTINGS */
+  voiceSettings: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 14,
+    paddingVertical: 14,
+    borderRadius: 16,
+    backgroundColor: "#F0F5FF",
+  },
+  voiceSettingsText: {
+    marginLeft: 8,
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#0A84FF",
+  },
+
+  /* FOOTER */
+  footer: {
+    marginTop: "auto",
+    backgroundColor: "#FFF",
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    padding: 20,
+
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    elevation: 10,
+  },
 });
