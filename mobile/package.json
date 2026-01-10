@@ -17,7 +17,7 @@
     "@react-navigation/stack": "^7.6.13",
     "expo": "~54.0.25",
     "expo-av": "~16.0.8",
-    "expo-constants": "~18.0.12",
+    "expo-constants": "~18.0.13",
     "expo-file-system": "~19.0.21",
     "expo-haptics": "~15.0.8",
     "expo-linear-gradient": "~15.0.8",
@@ -34,7 +34,7 @@
   },
   "devDependencies": {
     "@types/mapbox__polyline": "^1.0.5",
-    "@types/node": "^25.0.3",
+    "@types/node": "^25.0.5",
     "@types/react": "~19.1.0",
     "typescript": "~5.9.2"
   },

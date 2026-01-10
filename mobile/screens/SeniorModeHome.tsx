@@ -13,8 +13,9 @@ import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
 
 import { useSeniorMode } from "../context/SeniorModeContext";
-import EmergencyShare from "../components/EmergencyShare";
+import { emergencyCall, shareLiveLocation } from "../components/EmergencyShare";
 import { RootStackParamList } from "../types/navigation";
+import { Linking, Alert } from "react-native";
 
 type Props = StackScreenProps<RootStackParamList, "SeniorModeHome">;
 
@@ -49,7 +50,7 @@ export default function SeniorModeHome({ navigation }: Props) {
       {/* HEADER */}
       <View style={styles.header}>
         <Text style={styles.appName}>TARA-AI</Text>
-        <Text style={styles.subtitle}>Senior Navigation Assistant</Text>
+        <Text style={styles.subtitle}>Navigation Assistant</Text>
       </View>
 
       {/* HERO MIC */}
@@ -91,11 +92,6 @@ export default function SeniorModeHome({ navigation }: Props) {
           onToggle={(v) => setSettings({ highContrast: v })}
         />
         <SettingRow
-          label="Large Text"
-          value={settings.bigText}
-          onToggle={(v) => setSettings({ bigText: v })}
-        />
-        <SettingRow
           label="Slow Speech"
           value={settings.slowTts}
           onToggle={(v) => setSettings({ slowTts: v })}
@@ -105,20 +101,36 @@ export default function SeniorModeHome({ navigation }: Props) {
           value={settings.autoRepeat}
           onToggle={(v) => setSettings({ autoRepeat: v })}
         />
+      </View>
+
+      {/* BOTTOM UTILITY STRIP (DEMO STYLE) */}
+      <View style={styles.utilityStrip}>
+        <TouchableOpacity
+          style={styles.utilityItem}
+          onPress={emergencyCall}
+        >
+          <Ionicons name="call-outline" size={22} color="#1C1C1E" />
+          <Text style={styles.utilityText}>Emergency</Text>
+        </TouchableOpacity>
 
         <TouchableOpacity
-          style={styles.voiceSettings}
+          style={styles.utilityItem}
+          onPress={shareLiveLocation}
+        >
+          <Ionicons name="location-outline" size={22} color="#1C1C1E" />
+          <Text style={styles.utilityText}>Share</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.utilityItem}
           onPress={() => navigation.navigate("VoiceSettings" as never)}
         >
-          <Ionicons name="volume-high" size={20} color="#0A84FF" />
-          <Text style={styles.voiceSettingsText}>Voice Settings</Text>
+          <Ionicons name="volume-high-outline" size={22} color="#1C1C1E" />
+          <Text style={styles.utilityText}>Voice</Text>
         </TouchableOpacity>
       </View>
 
-      {/* SAFETY FOOTER */}
-      <View style={styles.footer}>
-        <EmergencyShare />
-      </View>
+
     </LinearGradient>
   );
 }
@@ -149,6 +161,42 @@ function SettingRow({
 /* ---------- STYLES ---------- */
 
 const styles = StyleSheet.create({
+  utilityStrip: {
+    position: "absolute",
+    bottom: 28,
+
+    left: 24,
+    right: 24,
+
+    backgroundColor: "#FFFFFF",
+    borderRadius: 22,
+    height: 64,
+
+    flexDirection: "row",
+    justifyContent: "space-evenly",
+    alignItems: "center",
+
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+
+  utilityItem: {
+    alignItems: "center",
+    justifyContent: "center",
+    width: 80,
+  },
+
+  utilityText: {
+    marginTop: 2,
+    fontSize: 11,
+    fontWeight: "500",
+    color: "#1C1C1E",
+  },
+
+
   safe: {
     flex: 1,
   },
@@ -203,6 +251,7 @@ const styles = StyleSheet.create({
     color: "#FFF",
     fontSize: 20,
     fontWeight: "700",
+    marginVertical: 3,
   },
 
   /* SECONDARY */
@@ -212,7 +261,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "#FFF",
     marginHorizontal: 50,
-    paddingVertical: 16,
+    paddingVertical: 20,
     borderRadius: 18,
 
     shadowColor: "#000",
