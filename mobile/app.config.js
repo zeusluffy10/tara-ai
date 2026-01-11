@@ -18,6 +18,12 @@ export default {
     },
 
     ios: {
+       infoPlist: {
+        NSLocationWhenInUseUsageDescription:
+          "TARA-AI uses your location to provide voice-guided navigation.",
+        NSMicrophoneUsageDescription:
+          "TARA-AI uses the microphone to recognize spoken destinations.",
+      },
       supportsTablet: true,
     },
 
