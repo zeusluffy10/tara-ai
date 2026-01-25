@@ -2,12 +2,14 @@
 import os
 import uuid
 import json
-from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, File
-from fastapi.responses import Response, FileResponse, JSONResponse
-from pydantic import BaseModel
+import io
 from typing import Optional
 
-from services.tts_service import generate_tts_audio_bytes  # async function above
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from pydantic import BaseModel
+
+from services.tts_service import generate_tts_audio_bytes  # async
 
 router = APIRouter(prefix="")
 
@@ -50,9 +52,13 @@ async def _process_job(job_id: str, text: str, voice: Optional[str]):
     _write_meta(job_id, meta)
     try:
         audio_bytes = await generate_tts_audio_bytes(text, voice)
+        if not audio_bytes:
+            raise ValueError("TTS returned no audio bytes")
+
         audio_path = _audio_path(job_id)
         with open(audio_path, "wb") as fa:
             fa.write(audio_bytes)
+
         meta.update({"status": "done", "size": os.path.getsize(audio_path)})
         _write_meta(job_id, meta)
     except Exception as e:
@@ -60,10 +66,50 @@ async def _process_job(job_id: str, text: str, voice: Optional[str]):
         _write_meta(job_id, meta)
 
 
+# ============================================================
+# ✅ NEW: GET /tts for Safari + Expo playback (IMPORTANT)
+# ============================================================
+@router.get("/tts")
+async def tts_stream(
+    text: str = Query(..., description="Text to speak"),
+    voice: Optional[str] = Query(None, description="Optional voice id/name"),
+):
+    """
+    Direct streaming TTS endpoint:
+    - iPhone Safari audio tag works
+    - expo-av Audio.Sound.createAsync({uri}) works
+    """
+    t = (text or "").strip()
+    if not t:
+        raise HTTPException(status_code=400, detail="text is required")
+
+    try:
+        audio_bytes = await generate_tts_audio_bytes(t, voice)
+        if not audio_bytes:
+            raise ValueError("TTS returned no audio bytes")
+
+        return StreamingResponse(
+            io.BytesIO(audio_bytes),
+            media_type="audio/mpeg",
+            headers={
+                # iOS Safari friendliness
+                "Accept-Ranges": "bytes",
+                "Cache-Control": "no-store",
+                "Content-Disposition": "inline; filename=tts.mp3",
+            },
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"TTS error: {e}")
+
+
+# ============================================================
+# ✅ Existing Job API (keep it)
+# ============================================================
 @router.post("/tts", status_code=202)
 async def create_tts_job(payload: TTSCreate, background_tasks: BackgroundTasks):
     """
     Start a TTS job and return job id immediately.
+    (Used for your async job workflow.)
     """
     text = (payload.text or "").strip()
     if not text:
@@ -94,7 +140,13 @@ def get_tts_result(job_id: str):
         raise HTTPException(status_code=404, detail="job not found")
     if meta.get("status") != "done":
         return JSONResponse(status_code=202, content=meta)  # still processing
+
     audio_path = _audio_path(job_id)
     if not os.path.exists(audio_path):
         raise HTTPException(status_code=404, detail="audio missing")
-    return FileResponse(audio_path, media_type="audio/mpeg", filename=f"{job_id}.mp3")
+
+    return FileResponse(
+        audio_path,
+        media_type="audio/mpeg",
+        filename=f"{job_id}.mp3",
+    )
