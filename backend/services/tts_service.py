@@ -2,10 +2,30 @@
 import os
 from typing import Optional, Literal
 import httpx
+import random
+
+TAGALOG_PREFIXES = [
+    "",  # most natural: no prefix
+    "Pagdating sa kanto, ",
+    "Bandang unahan, ",
+    "Sa susunod na kalsada, ",
+    "Malapit na, ",
+]
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 Style = Literal["calm", "warning"]
+
+def _apply_natural_prefix(text: str) -> str:
+    t = (text or "").strip()
+
+    # Avoid double-prefixing
+    lowered = t.lower()
+    if lowered.startswith(("pagdating", "bandang", "sa susunod", "malapit")):
+        return t
+
+    prefix = random.choice(TAGALOG_PREFIXES)
+    return f"{prefix}{t}" if prefix else t
 
 def _normalize_lang(lang: Optional[str]) -> str:
     if not lang:
@@ -36,14 +56,19 @@ def _tagalog_tuning(text: str) -> str:
 
 def _apply_style(text: str, style: Style) -> str:
     t = (text or "").strip()
+
+    # ✅ natural variation first
+    t = _apply_natural_prefix(t)
+
     if style == "warning":
-        # short + urgent
         return f"Babala. {t}!"
+
     return t
+    
 
 async def generate_tts_audio_bytes(
     text: str,
-    voice: Optional[str] = "alloy",
+    voice: Optional[str] = "nova",
     model: str = "tts-1",
     lang: Optional[str] = "fil",          # ✅ ADD THIS
     style: Style = "calm",                # ✅ optional (safe default)
