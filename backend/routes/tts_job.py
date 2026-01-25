@@ -7,20 +7,15 @@ from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from pydantic import BaseModel
 
-from services.tts_service import generate_tts_audio_bytes  # async
+from services.tts_service import generate_tts_audio_bytes
+from utils.tagalog_nav import tagalog_rewrite  # ✅ new
 
 router = APIRouter(prefix="")
 
 # jobs directory (relative to backend)
 JOBS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "jobs")
 os.makedirs(JOBS_DIR, exist_ok=True)
-
-
-class TTSCreate(BaseModel):
-    text: str
-    voice: Optional[str] = None
 
 
 def _meta_path(job_id: str):
@@ -44,84 +39,70 @@ def _read_meta(job_id: str):
         return json.load(f)
 
 
-async def _process_job(job_id: str, text: str, voice: Optional[str]):
-    """
-    Background worker function that calls TTS service and writes files.
-    """
-    meta = {"job_id": job_id, "status": "processing", "voice": voice}
-    _write_meta(job_id, meta)
-    try:
-        audio_bytes = await generate_tts_audio_bytes(text, voice)
-        if not audio_bytes:
-            raise ValueError("TTS returned no audio bytes")
-
-        audio_path = _audio_path(job_id)
-        with open(audio_path, "wb") as fa:
-            fa.write(audio_bytes)
-
-        meta.update({"status": "done", "size": os.path.getsize(audio_path)})
-        _write_meta(job_id, meta)
-    except Exception as e:
-        meta.update({"status": "error", "error": str(e)})
-        _write_meta(job_id, meta)
-
-
-# ============================================================
-# ✅ NEW: GET /tts for Safari + Expo playback (IMPORTANT)
-# ============================================================
+# ✅ 1) GET /tts (STREAMING) — this fixes Safari testing and mobile playback
 @router.get("/tts")
 async def tts_stream(
-    text: str = Query(..., description="Text to speak"),
-    voice: Optional[str] = Query(None, description="Optional voice id/name"),
+    text: str = Query(...),
+    lang: str = Query("fil"),            # ✅ default Tagalog
+    voice: Optional[str] = Query(None),  # ✅ optional
 ):
-    """
-    Direct streaming TTS endpoint:
-    - iPhone Safari audio tag works
-    - expo-av Audio.Sound.createAsync({uri}) works
-    """
-    t = (text or "").strip()
-    if not t:
-        raise HTTPException(status_code=400, detail="text is required")
-
     try:
-        audio_bytes = await generate_tts_audio_bytes(t, voice)
+        # ✅ Always rewrite to Tagalog when lang=fil
+        final_text = tagalog_rewrite(text) if lang.lower().startswith("fil") else text
+
+        audio_bytes = await generate_tts_audio_bytes(final_text, voice=voice, lang=lang)
         if not audio_bytes:
-            raise ValueError("TTS returned no audio bytes")
+            raise ValueError("TTS returned no audio")
 
         return StreamingResponse(
             io.BytesIO(audio_bytes),
             media_type="audio/mpeg",
             headers={
-                # iOS Safari friendliness
-                "Accept-Ranges": "bytes",
                 "Cache-Control": "no-store",
+                "Accept-Ranges": "bytes",
                 "Content-Disposition": "inline; filename=tts.mp3",
             },
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"TTS error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-# ============================================================
-# ✅ Existing Job API (keep it)
-# ============================================================
+# ✅ 2) POST /tts (JOB) — keep your job-based flow
 @router.post("/tts", status_code=202)
-async def create_tts_job(payload: TTSCreate, background_tasks: BackgroundTasks):
+async def create_tts_job(payload: dict, background_tasks: BackgroundTasks):
     """
     Start a TTS job and return job id immediately.
-    (Used for your async job workflow.)
+    Accepts: { "text": "...", "voice": "...", "lang": "fil" }
     """
-    text = (payload.text or "").strip()
+    text = (payload.get("text") or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="text is required")
 
+    voice = payload.get("voice")
+    lang = payload.get("lang") or "fil"
+
+    # rewrite to Tagalog if fil
+    final_text = tagalog_rewrite(text) if str(lang).lower().startswith("fil") else text
+
     job_id = uuid.uuid4().hex
-    meta = {"job_id": job_id, "status": "queued", "voice": payload.voice}
+    meta = {"job_id": job_id, "status": "queued", "voice": voice, "lang": lang}
     _write_meta(job_id, meta)
 
-    # schedule background work (does not block response)
-    background_tasks.add_task(_process_job, job_id, text, payload.voice)
+    async def _process_job():
+        meta2 = {"job_id": job_id, "status": "processing", "voice": voice, "lang": lang}
+        _write_meta(job_id, meta2)
+        try:
+            audio_bytes = await generate_tts_audio_bytes(final_text, voice=voice, lang=lang)
+            audio_path = _audio_path(job_id)
+            with open(audio_path, "wb") as fa:
+                fa.write(audio_bytes)
+            meta2.update({"status": "done", "size": os.path.getsize(audio_path)})
+            _write_meta(job_id, meta2)
+        except Exception as e:
+            meta2.update({"status": "error", "error": str(e)})
+            _write_meta(job_id, meta2)
 
+    background_tasks.add_task(_process_job)
     return JSONResponse(status_code=202, content={"job_id": job_id, "status": "queued"})
 
 
@@ -139,18 +120,8 @@ def get_tts_result(job_id: str):
     if not meta:
         raise HTTPException(status_code=404, detail="job not found")
     if meta.get("status") != "done":
-        return JSONResponse(status_code=202, content=meta)  # still processing
-
+        return JSONResponse(status_code=202, content=meta)
     audio_path = _audio_path(job_id)
     if not os.path.exists(audio_path):
         raise HTTPException(status_code=404, detail="audio missing")
-
-    return FileResponse(
-        audio_path,
-        media_type="audio/mpeg",
-        filename=f"{job_id}.mp3",
-    )
-
-@router.get("/health")
-def health():
-    return {"status": "ok"}
+    return FileResponse(audio_path, media_type="audio/mpeg", filename=f"{job_id}.mp3")
