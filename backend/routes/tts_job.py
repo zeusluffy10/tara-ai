@@ -150,3 +150,7 @@ def get_tts_result(job_id: str):
         media_type="audio/mpeg",
         filename=f"{job_id}.mp3",
     )
+
+@router.get("/health")
+def health():
+    return {"status": "ok"}
