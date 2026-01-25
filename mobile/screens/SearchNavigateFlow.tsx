@@ -16,6 +16,7 @@ import { getJSON, API_BASE } from "../utils/api";
 import { handleRouteError } from "../utils/errors";
 import { useSeniorMode } from "../context/SeniorModeContext";
 import { RootStackParamList } from "../types/navigation";
+import { speakTagalog } from "../utils/speak";
 
 type Prediction = {
   description: string;
@@ -130,9 +131,13 @@ export default function SearchNavigateFlow({ route, navigation }: Props) {
         // speak error for seniors (if enabled)
         if (settings.slowTts) {
           try {
-            const Speech = await import("expo-speech");
-            Speech.speak(message, { rate: 0.8 });
-          } catch {}
+            await speakTagalog(message, {
+              voice: settings.ttsVoice,
+              style: "calm",
+            });
+          } catch (e) {
+            console.warn("TTS error:", e);
+          }
         }
         Alert.alert("Route error", message);
         setLoading(false);

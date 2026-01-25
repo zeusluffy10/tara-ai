@@ -1,39 +1,53 @@
-// mobile/utils/filipinoNavigator.ts
+export function filipinoNavigator(instruction: string, distanceMeters?: number) {
+  let t = (instruction || "").trim();
 
-/**
- * Filipino-style navigation phrasing
- * Optimized for English TTS voices (en-US)
- * Calm, clear, senior-friendly
- */
-export function filipinoNavigator(
-  instruction: string,
-  distanceMeters?: number
-): string {
-  let text = instruction;
+  // Remove HTML if any
+  t = t.replace(/<[^>]+>/g, "");
+  t = t.replace(/\s+/g, " ").trim();
 
-  // Normalize directions
-  text = text.replace(/Head (north|south|east|west)/i, "Continue straight");
-  text = text.replace(/Continue/i, "Continue straight");
+  // Pure Tagalog replacements
+  const rules: Array<[RegExp, string]> = [
+    [/\bHead north\b/gi, "Dumiretso pahilaga"],
+    [/\bHead south\b/gi, "Dumiretso patimog"],
+    [/\bHead east\b/gi, "Dumiretso pasilangan"],
+    [/\bHead west\b/gi, "Dumiretso pakanluran"],
 
-  // Turns
-  text = text.replace(/Turn left/i, "Kaliwa");
-  text = text.replace(/Turn right/i, "Kanan");
-  text = text.replace(/Slight left/i, "Bahagyang kaliwa");
-  text = text.replace(/Slight right/i, "Bahagyang kanan");
-  text = text.replace(/Make a U-turn/i, "U-turn");
+    [/\bContinue\b/gi, "Magpatuloy"],
+    [/\bKeep left\b/gi, "Manatili sa kaliwa"],
+    [/\bKeep right\b/gi, "Manatili sa kanan"],
 
-  // Road phrasing
-  text = text.replace(/onto/i, "papunta sa");
-  text = text.replace(/toward/i, "papunta sa");
+    [/\bTurn left\b/gi, "Kumaliwa"],
+    [/\bTurn right\b/gi, "Kumanan"],
+    [/\bSlight left\b/gi, "Bahagyang kumaliwa"],
+    [/\bSlight right\b/gi, "Bahagyang kumanan"],
 
-  // Distance cues (polite, not slang)
-  if (distanceMeters !== undefined) {
-    if (distanceMeters > 80) {
-      text = `Sa susunod na kanto, ${text}`;
-    } else if (distanceMeters > 30) {
-      text = `Malapit na. ${text}`;
+    [/\bMake a U-turn\b/gi, "Mag-U-turn"],
+    [/\bU-turn\b/gi, "U-turn"],
+
+    [/\bExit\b/gi, "Lumabas"],
+    [/\bTake the exit\b/gi, "Dumaan sa labasan"],
+    [/\bMerge\b/gi, "Sumanib sa daan"],
+
+    [/\bDestination will be on the left\b/gi, "Ang pupuntahan ay nasa kaliwa"],
+    [/\bDestination will be on the right\b/gi, "Ang pupuntahan ay nasa kanan"],
+    [/\bYou have arrived\b/gi, "Nakarating na tayo"],
+  ];
+
+  for (const [re, rep] of rules) t = t.replace(re, rep);
+
+  // distance prefix in Tagalog
+  if (typeof distanceMeters === "number" && isFinite(distanceMeters)) {
+    const m = Math.max(1, Math.round(distanceMeters));
+    if (m >= 15) {
+      t = `Pagkalipas ng ${m} metro, ${t}`;
+    } else {
+      t = `Malapit na. ${t}`;
     }
   }
 
-  return text.trim();
+  // punctuation for natural TTS
+  t = t.trim();
+  if (t && !/[.!?]$/.test(t)) t += ".";
+
+  return t;
 }

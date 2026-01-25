@@ -1,41 +1,24 @@
 // mobile/utils/voiceStore.ts
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-const KEY = "TARA_SELECTED_VOICE";
+const KEY_OPENAI_VOICE = "tara_openai_tts_voice";
+const KEY_SENIOR_SLOW = "tara_senior_slow_voice";
 
-export async function savePreferredVoiceId(id: string | null) {
-  if (!id) await AsyncStorage.removeItem(KEY);
-  else await AsyncStorage.setItem(KEY, id);
+// ✅ OpenAI voice (used by backend /tts)
+export async function saveTtsVoice(voice: string) {
+  await AsyncStorage.setItem(KEY_OPENAI_VOICE, voice);
 }
 
-export async function loadPreferredVoiceId(): Promise<string | null> {
-  try {
-    return (await AsyncStorage.getItem(KEY)) || null;
-  } catch (e) {
-    console.warn("voiceStore load error", e);
-    return null;
-  }
+export async function loadTtsVoice(): Promise<string | null> {
+  return await AsyncStorage.getItem(KEY_OPENAI_VOICE);
 }
 
-// ===========================
-// Senior ultra-slow voice (NEW)
-// ===========================
-const SLOW_VOICE_KEY = "TARA_SENIOR_SLOW_VOICE";
-
+// ✅ Keep your existing slow toggle (if not already)
 export async function saveSeniorSlowVoice(v: boolean) {
-  try {
-    await AsyncStorage.setItem(SLOW_VOICE_KEY, JSON.stringify(v));
-  } catch (e) {
-    console.warn("voiceStore saveSeniorSlowVoice error", e);
-  }
+  await AsyncStorage.setItem(KEY_SENIOR_SLOW, v ? "1" : "0");
 }
 
 export async function loadSeniorSlowVoice(): Promise<boolean> {
-  try {
-    const v = await AsyncStorage.getItem(SLOW_VOICE_KEY);
-    return v ? JSON.parse(v) : true; // ✅ default ON for seniors
-  } catch (e) {
-    console.warn("voiceStore loadSeniorSlowVoice error", e);
-    return true;
-  }
+  const v = await AsyncStorage.getItem(KEY_SENIOR_SLOW);
+  return v === null ? true : v === "1";
 }

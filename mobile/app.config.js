@@ -3,6 +3,9 @@ import "dotenv/config";
 
 export default {
   expo: {
+    extra: {
+      "API_BASE_URL": "https://tara-ai-backend-swbp.onrender.com"
+    },
     name: "TARA AI",
     slug: "tara-ai",
     version: "1.0.0",

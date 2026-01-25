@@ -15,6 +15,7 @@ import * as Haptics from "expo-haptics";
 import { RootStackParamList } from "../types/navigation";
 import { useSeniorMode } from "../context/SeniorModeContext";
 import { unlockAudio } from "../utils/audioUnlock";
+import { speakTagalog } from "../utils/speak";
 
 type Props = StackScreenProps<RootStackParamList, "VoiceConfirm">;
 
@@ -38,7 +39,7 @@ async function playLOUD(text: string) {
   });
 
   const url =
-    "https://tara-ai-backend-swbp.onrender.com/tts?text=" +
+    "https://tara-ai-backend-swbp.onrender.com/tts?lang=fil&text=" +
     encodeURIComponent(text);
 
   const result = await Audio.Sound.createAsync(
@@ -52,6 +53,13 @@ async function playLOUD(text: string) {
 export default function VoiceConfirmScreen({ route, navigation }: Props) {
   const { text } = route.params;
   const { settings } = useSeniorMode();
+
+  useEffect(() => {
+    speakTagalog(`Pupunta ka ba sa ${text}?`, {
+      voice: settings.ttsVoice,
+      style: "calm",
+    }).catch(console.warn);
+  }, []);
 
   useEffect(() => {
     playLOUD(`Pupunta ka ba sa ${text}?`).catch(console.warn);

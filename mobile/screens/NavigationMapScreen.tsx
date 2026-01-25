@@ -66,7 +66,7 @@ export default function NavigationMapScreen({ route }: Props) {
   const FINAL_DISTANCE = navMode === "driving" ? 40 : 15;
 
   const [seniorSlowVoice, setSeniorSlowVoice] = useState(true);
-  const { seniorMode, settings } = useSeniorMode();
+  const { seniorMode, settings, effectiveSlow, effectiveStyle } = useSeniorMode();
 
   /* ===========================
      INIT (UNCHANGED)
@@ -151,7 +151,11 @@ export default function NavigationMapScreen({ route }: Props) {
   }
 
   function speakGuidance(text: string) {
-    speakLoud(text, { slow: seniorSlowVoice });
+    speakLoud(text, {
+      slow: effectiveSlow,
+      voice: settings.ttsVoice,
+      style: effectiveStyle,
+    });
   }
 
   function speakStep(index: number, distance?: number) {

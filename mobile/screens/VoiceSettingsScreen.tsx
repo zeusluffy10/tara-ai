@@ -1,105 +1,130 @@
 // mobile/screens/VoiceSettingsScreen.tsx
 import React, { useEffect, useState } from "react";
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  FlatList,
-  StyleSheet,
-  Alert,
-} from "react-native";
-import * as Speech from "expo-speech";
+import { View, Text, TouchableOpacity, StyleSheet, Alert } from "react-native";
 
-import {
-  savePreferredVoiceId,
-  loadPreferredVoiceId,
-  saveSeniorSlowVoice,
-  loadSeniorSlowVoice,
-} from "../utils/voiceStore";
 import { useSeniorMode } from "../context/SeniorModeContext";
+import { saveTtsVoice, loadTtsVoice, saveSeniorSlowVoice, loadSeniorSlowVoice } from "../utils/voiceStore";
+import { speakTagalog } from "../utils/speak"; // ✅ uses backend /tts
+
+type VoiceOption = {
+  id: string;
+  label: string;
+  subtitle: string;
+};
+
+const OPENAI_VOICES: VoiceOption[] = [
+  { id: "alloy", label: "Voice A", subtitle: "Default (clear & friendly)" },
+  { id: "nova", label: "Voice B", subtitle: "Softer tone" },
+  { id: "onyx", label: "Voice C", subtitle: "Deeper tone" },
+];
 
 export default function VoiceSettingsScreen() {
-  const [voices, setVoices] = useState<any[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [seniorSlowVoice, setSeniorSlowVoice] = useState<boolean>(true);
-  const { seniorMode } = useSeniorMode();
+  const { settings, setSettings, seniorMode } = useSeniorMode();
 
-  // ===========================
-  // LOAD DATA
-  // ===========================
+  const [selected, setSelected] = useState<string>(settings.ttsVoice || "alloy");
+  const [seniorSlowVoice, setSeniorSlowVoiceState] = useState<boolean>(true);
+  const [testing, setTesting] = useState(false);
+
   useEffect(() => {
     (async () => {
-      const list =
-        (await (Speech as any).getAvailableVoicesAsync?.()) || [];
-      setVoices(list);
+      try {
+        const savedVoice = await loadTtsVoice();
+        if (savedVoice) {
+          setSelected(savedVoice);
+          setSettings({ ttsVoice: savedVoice });
+        }
+      } catch {}
 
-      const pref = await loadPreferredVoiceId();
-      setSelected(pref);
-
-      const slow = await loadSeniorSlowVoice();
-      setSeniorSlowVoice(slow);
+      try {
+        const slow = await loadSeniorSlowVoice();
+        setSeniorSlowVoiceState(slow);
+      } catch {}
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ===========================
-  // SAVE VOICE
-  // ===========================
   async function choose(voiceId: string) {
-    setSelected(voiceId);
-    await savePreferredVoiceId(voiceId);
-    Alert.alert("Saved", "Preferred voice updated!");
+    try {
+      setSelected(voiceId);
+      setSettings({ ttsVoice: voiceId });
+      await saveTtsVoice(voiceId);
+      Alert.alert("Saved", "Voice updated!");
+    } catch (e) {
+      Alert.alert("Error", String(e));
+    }
   }
 
-  // ===========================
-  // RENDER VOICE ROW
-  // ===========================
-  function renderItem({ item }: { item: any }) {
-    const id = item.identifier ?? item.id ?? item.voice;
-    const label = `${item.name} (${item.language})`;
-    const isSel = id === selected;
+  async function testVoice(style: "calm" | "warning") {
+    try {
+      setTesting(true);
 
-    return (
-      <TouchableOpacity
-        style={[styles.row, isSel && styles.sel]}
-        onPress={() => choose(id)}
-        activeOpacity={0.8}
-      >
-        <Text style={{ fontWeight: isSel ? "700" : "400" }}>
-          {label}
-        </Text>
+      // ✅ Test in FULL Tagalog (and includes a word that often gets mispronounced)
+      const sample =
+        style === "warning"
+          ? "Lumihis ka sa daan. Dahan-dahan. Kumain muna kung kailangan."
+          : "Okay. Pupunta tayo sa destinasyon. Dahan-dahan lang. Kumain muna kung kailangan.";
 
-        <TouchableOpacity
-          onPress={() => {
-            try {
-              Speech.stop();
-            } catch {}
-
-            Speech.speak("Testing voice", {
-              voice: id,
-              rate: seniorSlowVoice ? 0.65 : 0.8,
-              pitch: 0.95,
-              volume: 1.0,
-            });
-          }}
-          activeOpacity={0.7}
-        >
-          <Text style={{ color: "#007bff", fontWeight: "600" }}>
-            Test
-          </Text>
-        </TouchableOpacity>
-      </TouchableOpacity>
-    );
+      await speakTagalog(sample, {
+        voice: selected,
+        style,
+      });
+    } catch (e) {
+      Alert.alert("Test failed", String(e));
+    } finally {
+      setTesting(false);
+    }
   }
 
-  // ===========================
-  // RENDER
-  // ===========================
   return (
-    <View style={{ flex: 1, padding: 16 }}>
-      <Text style={styles.title}>Choose TTS Voice</Text>
+    <View style={styles.container}>
+      <Text style={styles.title}>Voice Settings</Text>
 
-      {/* ACCESSIBILITY */}
-      <View style={styles.section}>
+      <View style={styles.card}>
+        <Text style={styles.sectionTitle}>OpenAI Tagalog Voice</Text>
+
+        {OPENAI_VOICES.map((v) => {
+          const isSel = v.id === selected;
+          return (
+            <TouchableOpacity
+              key={v.id}
+              style={[styles.voiceRow, isSel && styles.voiceRowSelected]}
+              onPress={() => choose(v.id)}
+              activeOpacity={0.85}
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.voiceLabel, isSel && { fontWeight: "800" }]}>{v.label}</Text>
+                <Text style={styles.voiceSub}>{v.subtitle}</Text>
+              </View>
+
+              <Text style={[styles.badge, isSel && styles.badgeSelected]}>{isSel ? "Selected" : "Select"}</Text>
+            </TouchableOpacity>
+          );
+        })}
+
+        <View style={styles.testRow}>
+          <TouchableOpacity
+            style={[styles.testBtn, testing && { opacity: 0.6 }]}
+            disabled={testing}
+            onPress={() => testVoice("calm")}
+          >
+            <Text style={styles.testText}>Test Calm</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.testBtnWarn, testing && { opacity: 0.6 }]}
+            disabled={testing}
+            onPress={() => testVoice("warning")}
+          >
+            <Text style={styles.testText}>Test Warning</Text>
+          </TouchableOpacity>
+        </View>
+
+        <Text style={styles.note}>
+          *This uses your backend TTS so you hear the real Tagalog pronunciation (not iOS default voice).
+        </Text>
+      </View>
+
+      <View style={styles.card}>
         <Text style={styles.sectionTitle}>Accessibility</Text>
 
         <TouchableOpacity
@@ -109,9 +134,10 @@ export default function VoiceSettingsScreen() {
           ]}
           onPress={async () => {
             const v = !seniorSlowVoice;
-            setSeniorSlowVoice(v);
+            setSeniorSlowVoiceState(v);
             await saveSeniorSlowVoice(v);
           }}
+          activeOpacity={0.9}
         >
           <Text style={styles.toggleText}>
             Senior Ultra-Slow Voice: {seniorSlowVoice ? "ON" : "OFF"}
@@ -119,61 +145,91 @@ export default function VoiceSettingsScreen() {
         </TouchableOpacity>
 
         <Text style={styles.note}>
-          Recommended for seniors. Slower, clearer voice guidance.
+          When Senior Mode is ON, your app forces safer pacing. (Voice choice still applies.)
+        </Text>
+
+        <Text style={[styles.note, { marginTop: 6 }]}>
+          Senior Mode: {seniorMode ? "ON" : "OFF"}
         </Text>
       </View>
-
-      {/* VOICE LIST */}
-      <FlatList
-        data={voices}
-        keyExtractor={(v) => v.identifier ?? v.id ?? v.voice}
-        renderItem={renderItem}
-      />
     </View>
   );
 }
 
-// ===========================
-// STYLES
-// ===========================
 const styles = StyleSheet.create({
-  title: {
-    fontSize: 18,
-    fontWeight: "700",
+  container: { flex: 1, padding: 16, backgroundColor: "#F6F8FF" },
+  title: { fontSize: 20, fontWeight: "800", marginBottom: 12, color: "#0A84FF" },
+
+  card: {
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    padding: 14,
     marginBottom: 12,
+    shadowColor: "#000",
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 4,
   },
-  row: {
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderColor: "#eee",
+
+  sectionTitle: { fontSize: 16, fontWeight: "800", marginBottom: 10 },
+
+  voiceRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#EEF2FF",
+    marginBottom: 10,
   },
-  sel: {
-    backgroundColor: "#eaf4ff",
+  voiceRowSelected: {
+    borderColor: "#0A84FF",
+    backgroundColor: "#EEF6FF",
   },
-  section: {
-    marginBottom: 20,
+  voiceLabel: { fontSize: 16, fontWeight: "700" },
+  voiceSub: { marginTop: 2, fontSize: 12, color: "#667085" },
+
+  badge: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    fontSize: 12,
+    fontWeight: "800",
+    color: "#0A84FF",
+    backgroundColor: "#EEF6FF",
   },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    marginBottom: 8,
+  badgeSelected: {
+    color: "#fff",
+    backgroundColor: "#0A84FF",
   },
+
+  testRow: { flexDirection: "row", gap: 10 },
+  testBtn: {
+    flex: 1,
+    backgroundColor: "#0A84FF",
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: "center",
+    marginTop: 4,
+  },
+  testBtnWarn: {
+    flex: 1,
+    backgroundColor: "#FF3B30",
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: "center",
+    marginTop: 4,
+  },
+  testText: { color: "#fff", fontWeight: "800" },
+
   toggle: {
     paddingVertical: 12,
-    paddingHorizontal: 14,
-    borderRadius: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
     alignItems: "center",
   },
-  toggleText: {
-    color: "#fff",
-    fontWeight: "700",
-  },
-  note: {
-    marginTop: 6,
-    color: "#555",
-    fontSize: 12,
-  },
+  toggleText: { color: "#fff", fontWeight: "900" },
+
+  note: { marginTop: 8, color: "#667085", fontSize: 12 },
 });
