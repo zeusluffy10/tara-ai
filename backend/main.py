@@ -27,12 +27,16 @@ from utils.maps_client import (
 )
 
 app = FastAPI()
-app.include_router(tts_job_router)
-app.include_router(navigation_router)
+
+# ✅ streaming TTS first (GET /tts)
 app.include_router(tts_router)
+
+# ✅ job TTS under /tts/job/*
+app.include_router(tts_job_router)
+
+app.include_router(navigation_router)
 app.include_router(landmark_router)
 app.include_router(reroute_router)
-
 
 class Question(BaseModel):
     question: str
