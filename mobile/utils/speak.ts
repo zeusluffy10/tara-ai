@@ -1,48 +1,22 @@
 // mobile/utils/speak.ts
-import { Audio } from "expo-av";
-import { unlockAudio } from "./audioUnlock";
+// ✅ DEPRECATED WRAPPER — keep for backward compatibility
+// All speech now goes through speakLoud (backend OpenAI TTS)
+
+import { speakLoud } from "./tts_loud";
 
 type Style = "calm" | "warning";
 
-let sound: Audio.Sound | null = null;
-
+/**
+ * @deprecated
+ * Use speakLoud() directly.
+ * This function is kept only to avoid breaking older imports.
+ */
 export async function speakTagalog(
   text: string,
   opts?: { voice?: string; style?: Style }
 ) {
-  const voice = opts?.voice ?? "alloy";
-  const style: Style = opts?.style ?? "calm";
-
-  // stop previous
-  if (sound) {
-    try {
-      await sound.stopAsync();
-      await sound.unloadAsync();
-    } catch {}
-    sound = null;
-  }
-
-  await unlockAudio();
-
-  await Audio.setAudioModeAsync({
-    playsInSilentModeIOS: true,
-    allowsRecordingIOS: false,
-    staysActiveInBackground: false,
-    shouldDuckAndroid: false,
+  return speakLoud(text, {
+    voice: opts?.voice,
+    style: opts?.style ?? "calm",
   });
-
-  const url =
-    "https://tara-ai-backend-swbp.onrender.com/tts?text=" +
-    encodeURIComponent(text) +
-    "&voice=" +
-    encodeURIComponent(voice) +
-    "&style=" +
-    encodeURIComponent(style);
-
-  const result = await Audio.Sound.createAsync(
-    { uri: url },
-    { shouldPlay: true, volume: 1.0 }
-  );
-
-  sound = result.sound;
 }

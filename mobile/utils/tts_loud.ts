@@ -3,58 +3,72 @@ import { Audio } from "expo-av";
 import Constants from "expo-constants";
 
 export type VoiceStyle = "calm" | "warning";
-
 export type VoiceOptions = {
-  slow?: boolean;
-  voice?: string;        // alloy | nova | onyx
-  style?: VoiceStyle;    // calm | warning
+  voice?: string;
+  style?: VoiceStyle;
+  volume?: number;
+  lang?: "fil" | "en";
 };
 
-/**
- * 🔊 Senior-safe, backend-powered Tagalog TTS
- * Uses OpenAI voices (NOT iOS system voice)
- */
-export async function speakLoud(
-  text: string,
-  options?: VoiceOptions
-) {
+let currentSound: Audio.Sound | null = null;
+let lastStartAt = 0;
+
+export async function stopSpeakLoud() {
+  if (!currentSound) return;
   try {
+    await currentSound.stopAsync();
+    await currentSound.unloadAsync();
+  } catch {}
+  currentSound = null;
+}
+
+export async function speakLoud(text: string, options?: VoiceOptions) {
+  try {
+    // ✅ always stop what’s currently playing first
+    await stopSpeakLoud();
+
+    const now = Date.now();
+    // ✅ debounce only after stopping (prevents rapid re-trigger spam)
+    if (now - lastStartAt < 250) return;
+    lastStartAt = now;
+
     const voice = options?.voice ?? "alloy";
     const style = options?.style ?? "calm";
+    const volume = options?.volume ?? 1.0;
+    const lang = options?.lang ?? "fil";
 
-    // 🧠 Emotion prefix (helps model prosody)
-    const styledText =
-      style === "warning"
-        ? `Babala. ${text}`
-        : text;
-
-    // 🔗 Backend URL (Render)
     const baseUrl =
       Constants.expoConfig?.extra?.API_BASE_URL ??
       "https://tara-ai-backend-swbp.onrender.com";
 
     const url =
-      `${baseUrl}/tts` +
-      `?text=${encodeURIComponent(styledText)}` +
-      `&voice=${encodeURIComponent(voice)}`;
+      `${baseUrl}/tts?` +
+      `lang=${encodeURIComponent(lang)}&` +
+      `voice=${encodeURIComponent(voice)}&` +
+      `style=${encodeURIComponent(style)}&` +
+      `text=${encodeURIComponent(text)}`;
 
-    // 🎧 Load & play audio
     const { sound } = await Audio.Sound.createAsync(
       { uri: url },
-      {
-        shouldPlay: true,
-        volume: 1.0,
-        isLooping: false,
-      }
+      { shouldPlay: true, volume }
     );
 
-    // 🧹 Cleanup after playback
+    currentSound = sound;
+
     sound.setOnPlaybackStatusUpdate((status) => {
-      if ((status as any).didJustFinish) {
-        sound.unloadAsync();
+      const s: any = status;
+
+      if (!s?.isLoaded) {
+        if (s?.error) console.warn("Audio playback error:", s.error);
+        return;
+      }
+
+      if (s.didJustFinish) {
+        sound.unloadAsync().catch(() => {});
+        if (currentSound === sound) currentSound = null;
       }
     });
   } catch (e) {
-    console.warn("🔊 speakLoud (backend TTS) failed:", e);
+    console.warn("speakLoud failed:", e);
   }
 }

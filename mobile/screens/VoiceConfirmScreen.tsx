@@ -7,7 +7,6 @@ import {
   Alert,
 } from "react-native";
 import { StackScreenProps } from "@react-navigation/stack";
-import { Audio } from "expo-av";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -15,61 +14,47 @@ import * as Haptics from "expo-haptics";
 import { RootStackParamList } from "../types/navigation";
 import { useSeniorMode } from "../context/SeniorModeContext";
 import { unlockAudio } from "../utils/audioUnlock";
-import { speakTagalog } from "../utils/speak";
+import { speakLoud, stopSpeakLoud  } from "../utils/tts_loud"; // ✅ unified backend TTS
 
 type Props = StackScreenProps<RootStackParamList, "VoiceConfirm">;
-
-let sound: Audio.Sound | null = null;
-
-/* 🔊 LOUD TTS (UNCHANGED LOGIC, SAFE) */
-async function playLOUD(text: string) {
-  if (sound) {
-    try {
-      await sound.stopAsync();
-      await sound.unloadAsync();
-    } catch {}
-    sound = null;
-  }
-
-  await Audio.setAudioModeAsync({
-    playsInSilentModeIOS: true,
-    allowsRecordingIOS: false,
-    staysActiveInBackground: false,
-    shouldDuckAndroid: false,
-  });
-
-  const url =
-    "https://tara-ai-backend-swbp.onrender.com/tts?lang=fil&text=" +
-    encodeURIComponent(text);
-
-  const result = await Audio.Sound.createAsync(
-    { uri: url },
-    { shouldPlay: true, volume: 1.0 }
-  );
-
-  sound = result.sound;
-}
 
 export default function VoiceConfirmScreen({ route, navigation }: Props) {
   const { text } = route.params;
   const { settings } = useSeniorMode();
 
+  // ✅ Speak once on mount (no double TTS)
   useEffect(() => {
-    speakTagalog(`Pupunta ka ba sa ${text}?`, {
-      voice: settings.ttsVoice,
-      style: "calm",
-    }).catch(console.warn);
-  }, []);
+    (async () => {
+      try {
+        await stopSpeakLoud();
+        await speakLoud(`Pupunta ka ba sa ${text}?`, {
+          voice: settings.ttsVoice || "nova",
+          style: "calm",
+        });
+      } catch (e) {
+        console.warn("VoiceConfirm initial TTS failed:", e);
+      }
+    })();
 
-  useEffect(() => {
-    playLOUD(`Pupunta ka ba sa ${text}?`).catch(console.warn);
-  }, []);
+    // cleanup when leaving screen
+    return () => {
+      stopSpeakLoud().catch(() => {});
+    };
+  }, [text, settings.ttsVoice]);
 
   async function confirm() {
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+
       await unlockAudio();
-      await playLOUD(`Okay. Dadalhin kita sa ${text}.`);
+
+      // ✅ stop any current audio then confirm
+      await stopSpeakLoud();
+      await speakLoud(`Okay. Dadalhin kita sa ${text}.`, {
+        voice: settings.ttsVoice || "nova",
+        style: "calm",
+      });
+
       navigation.navigate("SearchNavigateFlow", { initialQuery: text });
     } catch (e) {
       Alert.alert("Error", String(e));
@@ -77,10 +62,7 @@ export default function VoiceConfirmScreen({ route, navigation }: Props) {
   }
 
   return (
-    <LinearGradient
-      colors={["#EAF2FF", "#DDEBFF"]}
-      style={styles.container}
-    >
+    <LinearGradient colors={["#EAF2FF", "#DDEBFF"]} style={styles.container}>
       {/* CARD */}
       <View style={styles.card}>
         {/* ICON */}
@@ -89,38 +71,28 @@ export default function VoiceConfirmScreen({ route, navigation }: Props) {
         </View>
 
         {/* QUESTION */}
-        <Text
-          style={[
-            styles.question,
-            settings.bigText && { fontSize: 30 },
-          ]}
-        >
+        <Text style={[styles.question, settings.bigText && { fontSize: 30 }]}>
           Pupunta ka ba sa
         </Text>
 
         {/* DESTINATION */}
-        <Text
-          style={[
-            styles.address,
-            settings.bigText && { fontSize: 28 },
-          ]}
-        >
+        <Text style={[styles.address, settings.bigText && { fontSize: 28 }]}>
           {text}
         </Text>
 
         {/* ACTIONS */}
         <View style={styles.actions}>
-          <TouchableOpacity
-            style={[styles.actionBtn, styles.yesBtn]}
-            onPress={confirm}
-          >
+          <TouchableOpacity style={[styles.actionBtn, styles.yesBtn]} onPress={confirm}>
             <Ionicons name="checkmark" size={28} color="#FFF" />
             <Text style={styles.actionText}>Oo</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
             style={[styles.actionBtn, styles.noBtn]}
-            onPress={() => navigation.goBack()}
+            onPress={async () => {
+              await stopSpeakLoud();
+              navigation.goBack();
+            }}
           >
             <Ionicons name="close" size={28} color="#FFF" />
             <Text style={styles.actionText}>Hindi</Text>
@@ -130,9 +102,13 @@ export default function VoiceConfirmScreen({ route, navigation }: Props) {
         {/* PLAY LOUD */}
         <TouchableOpacity
           style={styles.loudBtn}
-          onPress={() =>
-            playLOUD(`Pupunta ka ba sa ${text}?`)
-          }
+          onPress={async () => {
+            await stopSpeakLoud();
+            await speakLoud(`Pupunta ka ba sa ${text}?`, {
+              voice: settings.ttsVoice || "nova",
+              style: "calm",
+            });
+          }}
         >
           <Ionicons name="volume-high" size={22} color="#0A84FF" />
           <Text style={styles.loudText}>Play Loud</Text>
