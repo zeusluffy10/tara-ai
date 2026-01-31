@@ -2,7 +2,6 @@ from fastapi import APIRouter, Query
 import requests
 import os
 import time
-from typing import Optional
 
 router = APIRouter()
 
@@ -12,40 +11,27 @@ GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 CACHE = {}
 CACHE_TTL = 60 * 60  # 1 hour
 
-# POI types that are GOOD spoken landmarks for seniors
-POI_TYPES = [
-    "restaurant",
-    "cafe",
-    "convenience_store",
-    "supermarket",
-    "pharmacy",
-    "hospital",
-    "bank",
-    "atm",
-    "school",
-    "church",
-    "shopping_mall",
+# ❌ Area-level names we NEVER want to speak
+BAD_WORDS = [
+    "manila",
+    "quezon city",
+    "makati",
+    "city",
+    "barangay",
+    "district",
+    "region",
+    "philippines",
 ]
 
-def _places_nearby(lat: float, lng: float, radius: int, place_type: Optional[str] = None):
-    params = {
-        "location": f"{lat},{lng}",
-        "radius": radius,
-        "key": GOOGLE_MAPS_API_KEY,
-        "rankby": "prominence",
-    }
-    if place_type:
-        params["type"] = place_type
-
-    url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
-    return requests.get(url, params=params, timeout=6)
+def is_bad_landmark(name: str) -> bool:
+    low = name.lower()
+    return any(bad in low for bad in BAD_WORDS)
 
 
 @router.get("/landmark")
 def get_landmark(
     lat: float = Query(...),
-    lng: float = Query(...),
-    radius: int = Query(100, ge=40, le=300),
+    lng: float = Query(...)
 ):
     if not GOOGLE_MAPS_API_KEY:
         return {"name": None}
@@ -54,40 +40,41 @@ def get_landmark(
     now = time.time()
 
     # ✅ Cache hit
-    if key in CACHE:
-        cached = CACHE[key]
-        if now - cached["ts"] < CACHE_TTL:
-            return {"name": cached["name"], "source": "cache"}
+    cached = CACHE.get(key)
+    if cached and now - cached["ts"] < CACHE_TTL:
+        return {"name": cached["name"]}
 
-    # 1️⃣ First pass: general nearby search (often finds Chowking directly)
+    url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+    params = {
+        "location": f"{lat},{lng}",
+        "radius": 40,   # 👴 walking distance
+        "key": GOOGLE_MAPS_API_KEY,
+    }
+
     try:
-        res = _places_nearby(lat, lng, radius)
-        if res.status_code == 200:
-            data = res.json()
-            if data.get("status") == "OK" and data.get("results"):
-                name = data["results"][0].get("name")
-                if name:
-                    CACHE[key] = {"name": name, "ts": now}
-                    return {"name": name, "source": "places"}
+        res = requests.get(url, params=params, timeout=5)
+        data = res.json()
     except Exception:
-        pass
+        return {"name": None}
 
-    # 2️⃣ Second pass: try specific POI types
-    for t in POI_TYPES:
-        try:
-            res = _places_nearby(lat, lng, radius, place_type=t)
-            if res.status_code != 200:
-                continue
+    if data.get("status") != "OK":
+        return {"name": None}
 
-            data = res.json()
-            if data.get("status") == "OK" and data.get("results"):
-                name = data["results"][0].get("name")
-                if name:
-                    CACHE[key] = {"name": name, "ts": now}
-                    return {"name": name, "source": f"type:{t}"}
-        except Exception:
+    results = data.get("results", [])
+
+    for r in results:
+        name = r.get("name")
+        if not name:
             continue
 
-    # 3️⃣ Fallback: nothing useful nearby
+        # ❌ Skip city/area names
+        if is_bad_landmark(name):
+            continue
+
+        # ✅ First GOOD small place wins (photo studio, bakery, tindahan)
+        CACHE[key] = {"name": name, "ts": now}
+        return {"name": name}
+
+    # fallback: nothing suitable
     CACHE[key] = {"name": None, "ts": now}
-    return {"name": None, "source": "none"}
+    return {"name": None}
