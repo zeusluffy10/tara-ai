@@ -45,7 +45,7 @@ function getStepLatLng(step: any): { lat: number; lng: number } | null {
   return { lat, lng };
 }
 
-export default function NavigationMapScreen({ route }: Props) {
+export default function NavigationMapScreen({ route, navigation }: Props) {
   const { routeData } = route.params;
 
   const mapRef = useRef<MapView | null>(null);
@@ -103,8 +103,10 @@ export default function NavigationMapScreen({ route }: Props) {
 
     if (routeData?.steps?.length) {
       setCurrentSteps(routeData.steps);
-      // Speak the first step, landmark may arrive shortly after
-      speakStep(0, undefined, { tapped: false });
+
+      setTimeout(() => {
+        speakStep(0, undefined, { tapped: false });
+      }, 500);
     }
 
     startLocationWatch();
@@ -223,7 +225,7 @@ export default function NavigationMapScreen({ route }: Props) {
     return "Makinig, ";
   }
 
-  function speakStep(
+  async function speakStep(
     index: number,
     distance?: number,
     opts?: { tapped?: boolean; forceLandmark?: boolean }
@@ -231,12 +233,27 @@ export default function NavigationMapScreen({ route }: Props) {
     const step = steps[index];
     if (!step?.instruction) return;
 
-    // announcedRef.current = false;
+    let landmarkPrefix = "";
 
-    const prefix = buildPrefix(opts);
+    const ll = getStepLatLng(step);
 
-    // `filipinoNavigator` can shorten / clean directions
+    if (ll) {
+      try {
+        const name = await getLandmarkName(ll.lat, ll.lng);
+
+        if (name) {
+          landmarkPrefix = `Malapit sa ${name}, `;
+          setCurrentLandmark(name); // keeps UI chip updated
+        }
+      } catch {}
+    }
+
+    const prefix =
+      landmarkPrefix ||
+      (opts?.tapped ? "" : "Makinig, ");
+
     const spoken = filipinoNavigator(prefix + step.instruction, distance);
+
     speakGuidance(spoken);
   }
 
@@ -312,18 +329,21 @@ export default function NavigationMapScreen({ route }: Props) {
   // ===========================
   // NEXT
   // ===========================
-  function handleNext() {
+  async function handleNext() {
     Vibration.vibrate(60);
 
-    // ✅ block auto announcements for 2 seconds after tapping Next
     manualSpeakUntilRef.current = Date.now() + 2000;
 
     if (stepIndex < steps.length - 1) {
       const next = stepIndex + 1;
       setStepIndex(next);
-      speakStep(next, undefined, { tapped: true });
+
+      // give landmark fetch a short chance to finish
+      setTimeout(() => {
+        speakStep(next, undefined, { tapped: true });
+      }, 500);
     } else {
-      speakStep(stepIndex, undefined, { tapped: true });
+      navigation.navigate("SeniorModeHome");
     }
   }
 
@@ -394,8 +414,8 @@ export default function NavigationMapScreen({ route }: Props) {
         <Text style={styles.eta}>ETA: {eta}</Text>
 
         <TouchableOpacity style={styles.nextBtn} onPress={handleNext}>
-          <Ionicons name={isLastStep ? "refresh" : "arrow-forward"} size={22} color="#FFF" />
-          <Text style={styles.nextText}>{isLastStep ? "Repeat" : "Next"}</Text>
+          <Ionicons name={isLastStep ? "home" : "arrow-forward"} size={22} color="#FFF" />
+          <Text style={styles.nextText}>{isLastStep ? "Home" : "Next"}</Text>
         </TouchableOpacity>
       </LinearGradient>
     </View>

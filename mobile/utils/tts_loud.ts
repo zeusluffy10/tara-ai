@@ -15,20 +15,33 @@ let lastStartAt = 0;
 
 export async function stopSpeakLoud() {
   if (!currentSound) return;
+
   try {
     await currentSound.stopAsync();
+  } catch {}
+
+  try {
     await currentSound.unloadAsync();
   } catch {}
+
   currentSound = null;
+}
+
+async function forcePlaybackMode() {
+  await Audio.setAudioModeAsync({
+    allowsRecordingIOS: false,
+    playsInSilentModeIOS: true,
+    staysActiveInBackground: false,
+    shouldDuckAndroid: false,
+    playThroughEarpieceAndroid: false,
+  });
 }
 
 export async function speakLoud(text: string, options?: VoiceOptions) {
   try {
-    // ✅ always stop what’s currently playing first
     await stopSpeakLoud();
 
     const now = Date.now();
-    // ✅ debounce only after stopping (prevents rapid re-trigger spam)
     if (now - lastStartAt < 250) return;
     lastStartAt = now;
 
@@ -43,14 +56,21 @@ export async function speakLoud(text: string, options?: VoiceOptions) {
 
     const url =
       `${baseUrl}/tts?` +
-      `lang=${encodeURIComponent(lang)}&` +
-      `voice=${encodeURIComponent(voice)}&` +
-      `style=${encodeURIComponent(style)}&` +
-      `text=${encodeURIComponent(text)}`;
+      `lang=${encodeURIComponent(lang)}` +
+      `&voice=${encodeURIComponent(voice)}` +
+      `&style=${encodeURIComponent(style)}` +
+      `&text=${encodeURIComponent(text)}`;
+
+    // very important for iPhone loud playback after recording
+    await forcePlaybackMode();
 
     const { sound } = await Audio.Sound.createAsync(
       { uri: url },
-      { shouldPlay: true, volume }
+      {
+        shouldPlay: true,
+        volume,
+        progressUpdateIntervalMillis: 200,
+      }
     );
 
     currentSound = sound;
@@ -59,7 +79,9 @@ export async function speakLoud(text: string, options?: VoiceOptions) {
       const s: any = status;
 
       if (!s?.isLoaded) {
-        if (s?.error) console.warn("Audio playback error:", s.error);
+        if (s?.error) {
+          console.warn("Audio playback error:", s.error);
+        }
         return;
       }
 

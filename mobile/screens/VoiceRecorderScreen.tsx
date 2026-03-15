@@ -106,6 +106,13 @@ export default function VoiceRecorderScreen({ navigation }: Props) {
     setLoading(true);
     try {
       await recording.stopAndUnloadAsync();
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        shouldDuckAndroid: false,
+        playThroughEarpieceAndroid: false,
+      });
       const uri = recording.getURI();
       if (!uri) throw new Error("Recording failed");
 
