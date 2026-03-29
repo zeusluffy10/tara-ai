@@ -3,6 +3,7 @@
 // All speech now goes through speakLoud (backend OpenAI TTS)
 
 import { speakLoud } from "./tts_loud";
+import { TtsEmphasis, TtsGender } from "./voiceStore";
 
 type Style = "calm" | "warning";
 
@@ -13,10 +14,19 @@ type Style = "calm" | "warning";
  */
 export async function speakTagalog(
   text: string,
-  opts?: { voice?: string; style?: Style }
+  opts?: {
+    voice?: string;
+    gender?: TtsGender;
+    style?: Style;
+    emphasis?: TtsEmphasis;
+    pauseMs?: number;
+  }
 ) {
   return speakLoud(text, {
     voice: opts?.voice,
+    gender: opts?.gender,
     style: opts?.style ?? "calm",
+    emphasis: opts?.emphasis,
+    pauseMs: opts?.pauseMs,
   });
 }

@@ -29,7 +29,10 @@ export default function VoiceConfirmScreen({ route, navigation }: Props) {
         await stopSpeakLoud();
         await speakLoud(`Pupunta ka ba sa ${text}?`, {
           voice: settings.ttsVoice || "nova",
+          gender: settings.ttsGender,
           style: "calm",
+          emphasis: settings.ttsEmphasis,
+          pauseMs: settings.ttsPauseMs,
         });
       } catch (e) {
         console.warn("VoiceConfirm initial TTS failed:", e);
@@ -52,7 +55,10 @@ export default function VoiceConfirmScreen({ route, navigation }: Props) {
       await stopSpeakLoud();
       await speakLoud(`Okay. Dadalhin kita sa ${text}.`, {
         voice: settings.ttsVoice || "nova",
+        gender: settings.ttsGender,
         style: "calm",
+        emphasis: settings.ttsEmphasis,
+        pauseMs: settings.ttsPauseMs,
       });
 
       navigation.navigate("SearchNavigateFlow", { initialQuery: text });
@@ -106,7 +112,10 @@ export default function VoiceConfirmScreen({ route, navigation }: Props) {
             await stopSpeakLoud();
             await speakLoud(`Pupunta ka ba sa ${text}?`, {
               voice: settings.ttsVoice || "nova",
+              gender: settings.ttsGender,
               style: "calm",
+              emphasis: settings.ttsEmphasis,
+              pauseMs: settings.ttsPauseMs,
             });
           }}
         >

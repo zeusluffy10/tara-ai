@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from services.tts_service import generate_tts_audio_bytes
-from utils.tagalog_nav import tagalog_rewrite  # ✅ Tagalog rewrite
+from utils.tts_format import prepare_tts_text, normalize_voice
 
 # ✅ IMPORTANT: prefix to avoid clashing with GET /tts
 router = APIRouter(prefix="/tts/job")
@@ -21,8 +21,11 @@ os.makedirs(JOBS_DIR, exist_ok=True)
 class TTSCreate(BaseModel):
   text: str
   voice: Optional[str] = None
+  gender: Optional[str] = None
   lang: Optional[str] = "fil"
   style: Optional[str] = "calm"
+  pause_ms: Optional[int] = None
+  emphasis: Optional[str] = None
 
 def _meta_path(job_id: str):
   return os.path.join(JOBS_DIR, f"{job_id}.meta.json")
@@ -41,33 +44,37 @@ def _read_meta(job_id: str):
   with open(p, "r", encoding="utf-8") as f:
     return json.load(f)
 
-def apply_style(text: str, style: str) -> str:
-  t = (text or "").strip()
-  if style == "warning":
-    return f"Babala. {t}."
-  return t
-
-def normalize_voice(voice: Optional[str]) -> str:
-  if not voice:
-    return "nova"  # ✅ default female
-  v = voice.strip().lower()
-  if v in ["female", "girl", "woman"]:
-    return "nova"
-  if v in ["male", "man", "boy"]:
-    return "alloy"
-  return voice
-
-async def _process_job(job_id: str, text: str, voice: Optional[str], lang: str, style: str):
-  meta = {"job_id": job_id, "status": "processing", "voice": voice, "lang": lang, "style": style}
+async def _process_job(
+  job_id: str,
+  text: str,
+  voice: Optional[str],
+  gender: Optional[str],
+  lang: str,
+  style: str,
+  pause_ms: Optional[int],
+  emphasis: Optional[str],
+):
+  meta = {
+    "job_id": job_id,
+    "status": "processing",
+    "voice": voice,
+    "gender": gender,
+    "lang": lang,
+    "style": style,
+    "pause_ms": pause_ms,
+    "emphasis": emphasis,
+  }
   _write_meta(job_id, meta)
 
   try:
-    final_text = text
-    if (lang or "").lower().startswith("fil"):
-      final_text = tagalog_rewrite(final_text)
-
-    final_text = apply_style(final_text, style)
-    final_voice = normalize_voice(voice)
+    final_text, normalized_pause, normalized_emphasis = prepare_tts_text(
+      text=text,
+      lang=lang,
+      style=style,
+      pause_ms=pause_ms,
+      emphasis=emphasis,
+    )
+    final_voice = normalize_voice(voice, gender)
 
     audio_bytes = await generate_tts_audio_bytes(text=final_text, voice=final_voice)
 
@@ -75,7 +82,13 @@ async def _process_job(job_id: str, text: str, voice: Optional[str], lang: str, 
     with open(audio_path, "wb") as fa:
       fa.write(audio_bytes)
 
-    meta.update({"status": "done", "size": os.path.getsize(audio_path)})
+    meta.update({
+      "status": "done",
+      "size": os.path.getsize(audio_path),
+      "voice": final_voice,
+      "pause_ms": normalized_pause,
+      "emphasis": normalized_emphasis,
+    })
     _write_meta(job_id, meta)
 
   except Exception as e:
@@ -93,8 +106,11 @@ async def create_tts_job(payload: TTSCreate, background_tasks: BackgroundTasks):
     "job_id": job_id,
     "status": "queued",
     "voice": payload.voice,
+    "gender": payload.gender,
     "lang": payload.lang or "fil",
     "style": payload.style or "calm",
+    "pause_ms": payload.pause_ms,
+    "emphasis": payload.emphasis,
   }
   _write_meta(job_id, meta)
 
@@ -103,8 +119,11 @@ async def create_tts_job(payload: TTSCreate, background_tasks: BackgroundTasks):
     job_id,
     text,
     payload.voice,
+    payload.gender,
     payload.lang or "fil",
     payload.style or "calm",
+    payload.pause_ms,
+    payload.emphasis,
   )
 
   return JSONResponse(status_code=202, content={"job_id": job_id, "status": "queued"})

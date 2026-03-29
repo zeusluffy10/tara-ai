@@ -1,53 +1,76 @@
-export function filipinoNavigator(instruction: string, distanceMeters?: number) {
-  let t = (instruction || "").trim();
+const actionTranslations: Record<string, string> = {
+  "head north": "dumiretso pahilaga",
+  "head south": "dumiretso patimog",
+  "head east": "dumiretso pasilangan",
+  "head west": "dumiretso pakanluran",
+  continue: "magpatuloy",
+  "keep left": "manatili sa kaliwa",
+  "keep right": "manatili sa kanan",
+  "turn left": "lumiko pakaliwa",
+  "turn right": "lumiko pakanan",
+  "slight left": "bahagyang lumiko pakaliwa",
+  "slight right": "bahagyang lumiko pakanan",
+  "make a u-turn": "mag-U-turn",
+  "u-turn": "U-turn",
+  exit: "lumabas",
+  "take the exit": "dumaan sa labasan",
+  merge: "sumanib sa daan",
+  "destination will be on the left": "ang pupuntahan ay nasa kaliwa",
+  "destination will be on the right": "ang pupuntahan ay nasa kanan",
+  "you have arrived": "nakarating na tayo",
+};
 
-  // Remove HTML if any
-  t = t.replace(/<[^>]+>/g, "");
-  t = t.replace(/\s+/g, " ").trim();
+const actionPattern = new RegExp(
+  Object.keys(actionTranslations)
+    .sort((left, right) => right.length - left.length)
+    .map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|"),
+  "gi"
+);
 
-  // Pure Tagalog replacements
-  const rules: Array<[RegExp, string]> = [
-    [/\bHead north\b/gi, "Dumiretso pahilaga"],
-    [/\bHead south\b/gi, "Dumiretso patimog"],
-    [/\bHead east\b/gi, "Dumiretso pasilangan"],
-    [/\bHead west\b/gi, "Dumiretso pakanluran"],
+const distancePatterns = [
+  /\b(?:in|after)\s+(?<amount>\d+(?:\.\d+)?)\s*(?<unit>meters?|meter|m|kilometers?|kilometer|km)\b[, ]*(?<rest>.+)/i,
+  /^(?<rest>.+?)\s+\b(?:in|after)\s+(?<amount>\d+(?:\.\d+)?)\s*(?<unit>meters?|meter|m|kilometers?|kilometer|km)\b/i,
+];
 
-    [/\bContinue\b/gi, "Magpatuloy"],
-    [/\bKeep left\b/gi, "Manatili sa kaliwa"],
-    [/\bKeep right\b/gi, "Manatili sa kanan"],
+function toDistancePhrase(amount: string, unit: string) {
+  const numeric = Number(amount);
+  const rendered = Number.isFinite(numeric) && Number.isInteger(numeric) ? String(numeric) : amount;
+  return /km|kilometer/i.test(unit) ? `${rendered} kilometro` : `${rendered} metro`;
+}
 
-    [/\bTurn left\b/gi, "Kumaliwa"],
-    [/\bTurn right\b/gi, "Kumanan"],
-    [/\bSlight left\b/gi, "Bahagyang kumaliwa"],
-    [/\bSlight right\b/gi, "Bahagyang kumanan"],
+function translateActions(text: string) {
+  return text.replace(actionPattern, (value) => actionTranslations[value.toLowerCase()] ?? value);
+}
 
-    [/\bMake a U-turn\b/gi, "Mag-U-turn"],
-    [/\bU-turn\b/gi, "U-turn"],
-
-    [/\bExit\b/gi, "Lumabas"],
-    [/\bTake the exit\b/gi, "Dumaan sa labasan"],
-    [/\bMerge\b/gi, "Sumanib sa daan"],
-
-    [/\bDestination will be on the left\b/gi, "Ang pupuntahan ay nasa kaliwa"],
-    [/\bDestination will be on the right\b/gi, "Ang pupuntahan ay nasa kanan"],
-    [/\bYou have arrived\b/gi, "Nakarating na tayo"],
-  ];
-
-  for (const [re, rep] of rules) t = t.replace(re, rep);
-
-  // distance prefix in Tagalog
-  if (typeof distanceMeters === "number" && isFinite(distanceMeters)) {
-    const m = Math.max(1, Math.round(distanceMeters));
-    if (m >= 15) {
-      t = `Pagkalipas ng ${m} metro, ${t}`;
-    } else {
-      t = `Malapit na. ${t}`;
-    }
+function rewriteDistanceFirst(text: string) {
+  for (const pattern of distancePatterns) {
+    const match = text.match(pattern);
+    const groups = match?.groups;
+    if (!groups?.rest || !groups.amount || !groups.unit) continue;
+    return `Sa ${toDistancePhrase(groups.amount, groups.unit)}, ${translateActions(groups.rest.trim())}`;
   }
 
-  // punctuation for natural TTS
-  t = t.trim();
-  if (t && !/[.!?]$/.test(t)) t += ".";
+  return text;
+}
 
-  return t;
+export function filipinoNavigator(instruction: string, distanceMeters?: number) {
+  let text = (instruction || "").trim();
+
+  text = text.replace(/<[^>]+>/g, "");
+  text = text.replace(/\s+/g, " ").trim();
+  text = rewriteDistanceFirst(text);
+  text = translateActions(text);
+  text = text.replace(/\bonto\b/gi, "papunta sa");
+  text = text.replace(/\btoward\b/gi, "papunta sa");
+  text = text.replace(/\bvia\b/gi, "dumaan sa");
+
+  if (typeof distanceMeters === "number" && isFinite(distanceMeters)) {
+    const meters = Math.max(1, Math.round(distanceMeters));
+    text = meters >= 15 ? `Sa ${meters} metro, ${text}` : `Malapit na. ${text}`;
+  }
+
+  text = text.trim();
+  if (text && !/[.!?]$/.test(text)) text += ".";
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
 }

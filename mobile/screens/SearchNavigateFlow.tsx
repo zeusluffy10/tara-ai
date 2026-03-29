@@ -133,7 +133,10 @@ export default function SearchNavigateFlow({ route, navigation }: Props) {
           try {
             await speakTagalog(message, {
               voice: settings.ttsVoice,
+              gender: settings.ttsGender,
               style: "calm",
+              emphasis: settings.ttsEmphasis,
+              pauseMs: settings.ttsPauseMs,
             });
           } catch (e) {
             console.warn("TTS error:", e);

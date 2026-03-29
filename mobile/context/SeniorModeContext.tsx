@@ -6,7 +6,16 @@ import React, {
   ReactNode,
   useEffect,
 } from "react";
-import { loadTtsVoice, loadSeniorSlowVoice } from "../utils/voiceStore";
+import {
+  getDefaultVoiceForGender,
+  loadSeniorSlowVoice,
+  loadTtsEmphasis,
+  loadTtsGender,
+  loadTtsPauseMs,
+  loadTtsVoice,
+  TtsEmphasis,
+  TtsGender,
+} from "../utils/voiceStore";
 
 export type SeniorSettings = {
   highContrast: boolean;
@@ -24,6 +33,9 @@ export type SeniorSettings = {
 
   // ✅ OpenAI voice id used by backend /tts
   ttsVoice: string;
+  ttsGender: TtsGender;
+  ttsPauseMs: number;
+  ttsEmphasis: TtsEmphasis;
 
   // ✅ emotion style preference (optional; default calm)
   ttsStyle: "calm" | "warning";
@@ -39,7 +51,10 @@ const defaultSettings: SeniorSettings = {
   voiceRate: 0.65,
   voiceVolume: 1.0,
 
-  ttsVoice: "alloy",
+  ttsVoice: getDefaultVoiceForGender("female"),
+  ttsGender: "female",
+  ttsPauseMs: 280,
+  ttsEmphasis: "medium",
   ttsStyle: "calm",
 };
 
@@ -81,6 +96,25 @@ export const SeniorModeProvider = ({ children }: { children: ReactNode }) => {
         if (savedVoice) {
           setRaw((s) => ({ ...s, ttsVoice: savedVoice }));
         }
+      } catch {}
+
+      try {
+        const gender = await loadTtsGender();
+        setRaw((s) => ({
+          ...s,
+          ttsGender: gender,
+          ttsVoice: s.ttsVoice || getDefaultVoiceForGender(gender),
+        }));
+      } catch {}
+
+      try {
+        const pauseMs = await loadTtsPauseMs();
+        setRaw((s) => ({ ...s, ttsPauseMs: pauseMs }));
+      } catch {}
+
+      try {
+        const emphasis = await loadTtsEmphasis();
+        setRaw((s) => ({ ...s, ttsEmphasis: emphasis }));
       } catch {}
 
       // If you store slow toggle, load it too

@@ -16,7 +16,7 @@ import { StackScreenProps } from "@react-navigation/stack";
 
 import decodePolyline from "../utils/polylineDecode";
 import { RootStackParamList } from "../types/navigation";
-import { speakLoud } from "../utils/tts_loud";
+import { speakLoud, stopSpeakLoud } from "../utils/tts_loud";
 import { filipinoNavigator } from "../utils/filipinoNavigator";
 import { getLandmarkName } from "../utils/landmark";
 import { loadSeniorSlowVoice } from "../utils/voiceStore";
@@ -65,7 +65,14 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
   const steps = currentSteps;
 
   const [currentLandmark, setCurrentLandmark] = useState<string | null>(null);
+  const currentLandmarkRef = useRef<string | null>(null);
   const lastLandmarkKeyRef = useRef<string | null>(null);
+
+  /** Keep ref in sync with state so stale closures always read the latest value. */
+  function updateLandmark(name: string | null) {
+    currentLandmarkRef.current = name;
+    setCurrentLandmark(name);
+  }
 
   const lastRerouteRef = useRef<number>(0);
   const REROUTE_COOLDOWN_MS = 20_000;
@@ -114,6 +121,15 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ===========================
+  // CLEANUP
+  // ===========================
+  useEffect(() => {
+    return () => {
+      stopSpeakLoud();
+    };
+  }, []);
+
   useEffect(() => {
     if (seniorMode) setSeniorSlowVoice(true);
   }, [seniorMode]);
@@ -144,11 +160,11 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
     if (lastLandmarkKeyRef.current === key) return;
     lastLandmarkKeyRef.current = key;
 
-    setCurrentLandmark(null);
+    updateLandmark(null);
 
     getLandmarkName(ll.lat, ll.lng)
-      .then((name) => setCurrentLandmark(name))
-      .catch(() => setCurrentLandmark(null));
+      .then((name) => updateLandmark(name))
+      .catch(() => updateLandmark(null));
   }, [stepIndex, steps]);
 
   // ✅ When landmark arrives, re-speak current step ONCE with landmark prefix
@@ -210,19 +226,22 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
 
     speakLoud(text, {
       voice: settings.ttsVoice,
+      gender: settings.ttsGender,
       style: effectiveStyle,
+      emphasis: settings.ttsEmphasis,
+      pauseMs: settings.ttsPauseMs,
     });
   }
 
   function buildPrefix(opts?: { tapped?: boolean; forceLandmark?: boolean }) {
-    // ✅ If landmark exists, prefer it always
-    if (currentLandmark) return `Malapit sa ${currentLandmark}, `;
+    // ✅ Read from ref so stale closures always get the latest landmark
+    const landmark = currentLandmarkRef.current;
+    if (landmark) return `Malapit sa ${landmark}, `;
 
     // ✅ If user tapped Next, remove intro to feel faster
     if (opts?.tapped) return "";
 
-    // ✅ Calm, not spammy
-    return "Makinig, ";
+    return "";
   }
 
   async function speakStep(
@@ -233,26 +252,22 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
     const step = steps[index];
     if (!step?.instruction) return;
 
-    let landmarkPrefix = "";
+    let landmarkPrefix = buildPrefix(opts);
 
     const ll = getStepLatLng(step);
 
-    if (ll) {
+    if (!currentLandmarkRef.current && ll) {
       try {
         const name = await getLandmarkName(ll.lat, ll.lng);
 
         if (name) {
           landmarkPrefix = `Malapit sa ${name}, `;
-          setCurrentLandmark(name); // keeps UI chip updated
+          updateLandmark(name); // keeps UI chip updated
         }
       } catch {}
     }
 
-    const prefix =
-      landmarkPrefix ||
-      (opts?.tapped ? "" : "Makinig, ");
-
-    const spoken = filipinoNavigator(prefix + step.instruction, distance);
+    const spoken = filipinoNavigator(landmarkPrefix + step.instruction, distance);
 
     speakGuidance(spoken);
   }
@@ -273,8 +288,8 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
 
     // Preview prompt
     if (d < PREVIEW_DISTANCE && d > FINAL_DISTANCE) {
-      const prefix = currentLandmark ? `Malapit sa ${currentLandmark}, ` : "";
-      speakGuidance(`Sa ${Math.round(d)} metro, ${prefix}${step.instruction}`);
+      const prefix = currentLandmarkRef.current ? `Malapit sa ${currentLandmarkRef.current}, ` : "";
+      speakGuidance(filipinoNavigator(`${prefix}${step.instruction}`, Math.round(d)));
       announcedRef.current = true;
     }
 
@@ -336,6 +351,9 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
 
     if (stepIndex < steps.length - 1) {
       const next = stepIndex + 1;
+      // Clear landmark ref immediately so the pending speakStep reads null
+      // and fetches fresh — prevents stale closure from repeating old landmark.
+      currentLandmarkRef.current = null;
       setStepIndex(next);
 
       // give landmark fetch a short chance to finish
@@ -343,6 +361,8 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
         speakStep(next, undefined, { tapped: true });
       }, 500);
     } else {
+      // ✅ Stop any pending TTS before going home
+      await stopSpeakLoud();
       navigation.navigate("SeniorModeHome");
     }
   }
