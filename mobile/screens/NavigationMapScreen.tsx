@@ -16,7 +16,7 @@ import { StackScreenProps } from "@react-navigation/stack";
 
 import decodePolyline from "../utils/polylineDecode";
 import { RootStackParamList } from "../types/navigation";
-import { speakLoud } from "../utils/tts_loud";
+import { speakLoud, stopSpeakLoud } from "../utils/tts_loud";
 import { filipinoNavigator } from "../utils/filipinoNavigator";
 import { getLandmarkName } from "../utils/landmark";
 import { loadSeniorSlowVoice } from "../utils/voiceStore";
@@ -119,6 +119,15 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
     startLocationWatch();
     return stopLocationWatch;
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ===========================
+  // CLEANUP
+  // ===========================
+  useEffect(() => {
+    return () => {
+      stopSpeakLoud();
+    };
   }, []);
 
   useEffect(() => {
@@ -352,6 +361,8 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
         speakStep(next, undefined, { tapped: true });
       }, 500);
     } else {
+      // ✅ Stop any pending TTS before going home
+      await stopSpeakLoud();
       navigation.navigate("SeniorModeHome");
     }
   }
