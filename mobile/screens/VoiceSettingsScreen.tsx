@@ -3,27 +3,59 @@ import React, { useEffect, useState } from "react";
 import { View, Text, TouchableOpacity, StyleSheet, Alert } from "react-native";
 
 import { useSeniorMode } from "../context/SeniorModeContext";
-import { saveTtsVoice, loadTtsVoice, saveSeniorSlowVoice, loadSeniorSlowVoice } from "../utils/voiceStore";
+import {
+  getDefaultVoiceForGender,
+  loadSeniorSlowVoice,
+  loadTtsEmphasis,
+  loadTtsGender,
+  loadTtsPauseMs,
+  loadTtsVoice,
+  saveSeniorSlowVoice,
+  saveTtsEmphasis,
+  saveTtsGender,
+  saveTtsPauseMs,
+  saveTtsVoice,
+  TtsEmphasis,
+  TtsGender,
+} from "../utils/voiceStore";
 import { speakTagalog } from "../utils/speak"; // ✅ uses backend /tts
 
 type VoiceOption = {
   id: string;
   label: string;
   subtitle: string;
+  gender: "female" | "male" | "neutral";
 };
 
 const OPENAI_VOICES: VoiceOption[] = [
-  { id: "alloy", label: "Voice A", subtitle: "Default (clear & friendly)" },
-  { id: "nova", label: "Voice B", subtitle: "Softer tone" },
-  { id: "onyx", label: "Voice C", subtitle: "Deeper tone" },
+  { id: "nova", label: "Nova", subtitle: "Warm and natural for Tagalog guidance", gender: "female" },
+  { id: "onyx", label: "Onyx", subtitle: "Deep and steady for clear warnings", gender: "male" },
+  { id: "alloy", label: "Alloy", subtitle: "Balanced fallback voice", gender: "neutral" },
+];
+
+const PAUSE_OPTIONS = [
+  { value: 140, label: "Crisp", subtitle: "Short pauses for faster prompts" },
+  { value: 280, label: "Natural", subtitle: "Balanced spacing for everyday navigation" },
+  { value: 420, label: "Relaxed", subtitle: "Longer pauses for seniors and noisy streets" },
+];
+
+const EMPHASIS_OPTIONS: Array<{ value: TtsEmphasis; label: string; subtitle: string }> = [
+  { value: "low", label: "Light", subtitle: "Softest delivery" },
+  { value: "medium", label: "Natural", subtitle: "Balanced navigation tone" },
+  { value: "high", label: "Strong", subtitle: "Adds stronger cues for turns and warnings" },
 ];
 
 export default function VoiceSettingsScreen() {
   const { settings, setSettings, seniorMode } = useSeniorMode();
 
-  const [selected, setSelected] = useState<string>(settings.ttsVoice || "alloy");
+  const [selected, setSelected] = useState<string>(settings.ttsVoice || getDefaultVoiceForGender("female"));
+  const [gender, setGender] = useState<TtsGender>(settings.ttsGender || "female");
+  const [pauseMs, setPauseMs] = useState<number>(settings.ttsPauseMs || 280);
+  const [emphasis, setEmphasis] = useState<TtsEmphasis>(settings.ttsEmphasis || "medium");
   const [seniorSlowVoice, setSeniorSlowVoiceState] = useState<boolean>(true);
   const [testing, setTesting] = useState(false);
+
+  const visibleVoices = OPENAI_VOICES.filter((voice) => voice.gender === gender || voice.gender === "neutral");
 
   useEffect(() => {
     (async () => {
@@ -33,6 +65,24 @@ export default function VoiceSettingsScreen() {
           setSelected(savedVoice);
           setSettings({ ttsVoice: savedVoice });
         }
+      } catch {}
+
+      try {
+        const savedGender = await loadTtsGender();
+        setGender(savedGender);
+        setSettings({ ttsGender: savedGender });
+      } catch {}
+
+      try {
+        const savedPauseMs = await loadTtsPauseMs();
+        setPauseMs(savedPauseMs);
+        setSettings({ ttsPauseMs: savedPauseMs });
+      } catch {}
+
+      try {
+        const savedEmphasis = await loadTtsEmphasis();
+        setEmphasis(savedEmphasis);
+        setSettings({ ttsEmphasis: savedEmphasis });
       } catch {}
 
       try {
@@ -54,19 +104,54 @@ export default function VoiceSettingsScreen() {
     }
   }
 
+  async function chooseGender(nextGender: TtsGender) {
+    try {
+      const recommendedVoice = getDefaultVoiceForGender(nextGender);
+      setGender(nextGender);
+      setSelected(recommendedVoice);
+      setSettings({ ttsGender: nextGender, ttsVoice: recommendedVoice });
+      await saveTtsGender(nextGender);
+      await saveTtsVoice(recommendedVoice);
+    } catch (e) {
+      Alert.alert("Error", String(e));
+    }
+  }
+
+  async function choosePause(nextPauseMs: number) {
+    try {
+      setPauseMs(nextPauseMs);
+      setSettings({ ttsPauseMs: nextPauseMs });
+      await saveTtsPauseMs(nextPauseMs);
+    } catch (e) {
+      Alert.alert("Error", String(e));
+    }
+  }
+
+  async function chooseEmphasis(nextEmphasis: TtsEmphasis) {
+    try {
+      setEmphasis(nextEmphasis);
+      setSettings({ ttsEmphasis: nextEmphasis });
+      await saveTtsEmphasis(nextEmphasis);
+    } catch (e) {
+      Alert.alert("Error", String(e));
+    }
+  }
+
   async function testVoice(style: "calm" | "warning") {
     try {
       setTesting(true);
 
-      // ✅ Test in FULL Tagalog (and includes a word that often gets mispronounced)
       const sample =
         style === "warning"
-          ? "Lumihis ka sa daan. Dahan-dahan. Kumain muna kung kailangan."
-          : "Okay. Pupunta tayo sa destinasyon. Dahan-dahan lang. Kumain muna kung kailangan.";
+          ? "Sa 10 metro, lumiko pakaliwa. Malapit sa BDO. Mag-ingat."
+          : "Sa 20 metro, lumiko pakaliwa. Malapit sa Jollibee. Dahan-dahan lang.";
 
       await speakTagalog(sample, {
         voice: selected,
+        gender,
         style,
+        emphasis,
+        pauseMs,
       });
     } catch (e) {
       Alert.alert("Test failed", String(e));
@@ -82,7 +167,27 @@ export default function VoiceSettingsScreen() {
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>OpenAI Tagalog Voice</Text>
 
-        {OPENAI_VOICES.map((v) => {
+        <View style={styles.toggleRow}>
+          {(["female", "male"] as TtsGender[]).map((option) => {
+            const active = option === gender;
+            return (
+              <TouchableOpacity
+                key={option}
+                style={[styles.segmentBtn, active && styles.segmentBtnActive]}
+                onPress={() => chooseGender(option)}
+                activeOpacity={0.85}
+              >
+                <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
+                  {option === "female" ? "Female" : "Male"}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        <Text style={styles.subheading}>Voice timbre</Text>
+
+        {visibleVoices.map((v) => {
           const isSel = v.id === selected;
           return (
             <TouchableOpacity
@@ -97,6 +202,46 @@ export default function VoiceSettingsScreen() {
               </View>
 
               <Text style={[styles.badge, isSel && styles.badgeSelected]}>{isSel ? "Selected" : "Select"}</Text>
+            </TouchableOpacity>
+          );
+        })}
+
+        <Text style={styles.subheading}>Pause control</Text>
+        {PAUSE_OPTIONS.map((option) => {
+          const active = option.value === pauseMs;
+          return (
+            <TouchableOpacity
+              key={option.value}
+              style={[styles.voiceRow, active && styles.voiceRowSelected]}
+              onPress={() => choosePause(option.value)}
+              activeOpacity={0.85}
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.voiceLabel, active && { fontWeight: "800" }]}>{option.label}</Text>
+                <Text style={styles.voiceSub}>{option.subtitle}</Text>
+              </View>
+
+              <Text style={[styles.badge, active && styles.badgeSelected]}>{active ? "Selected" : `${option.value} ms`}</Text>
+            </TouchableOpacity>
+          );
+        })}
+
+        <Text style={styles.subheading}>Emphasis</Text>
+        {EMPHASIS_OPTIONS.map((option) => {
+          const active = option.value === emphasis;
+          return (
+            <TouchableOpacity
+              key={option.value}
+              style={[styles.voiceRow, active && styles.voiceRowSelected]}
+              onPress={() => chooseEmphasis(option.value)}
+              activeOpacity={0.85}
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.voiceLabel, active && { fontWeight: "800" }]}>{option.label}</Text>
+                <Text style={styles.voiceSub}>{option.subtitle}</Text>
+              </View>
+
+              <Text style={[styles.badge, active && styles.badgeSelected]}>{active ? "Selected" : "Select"}</Text>
             </TouchableOpacity>
           );
         })}
@@ -172,6 +317,24 @@ const styles = StyleSheet.create({
   },
 
   sectionTitle: { fontSize: 16, fontWeight: "800", marginBottom: 10 },
+  subheading: { fontSize: 13, fontWeight: "800", color: "#344054", marginTop: 12, marginBottom: 8 },
+
+  toggleRow: { flexDirection: "row", gap: 10, marginBottom: 12 },
+  segmentBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#D0D5DD",
+    alignItems: "center",
+    backgroundColor: "#F8FAFC",
+  },
+  segmentBtnActive: {
+    backgroundColor: "#0A84FF",
+    borderColor: "#0A84FF",
+  },
+  segmentText: { fontWeight: "800", color: "#344054" },
+  segmentTextActive: { color: "#FFF" },
 
   voiceRow: {
     flexDirection: "row",

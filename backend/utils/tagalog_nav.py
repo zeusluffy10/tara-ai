@@ -1,70 +1,113 @@
 import re
 
+ACTION_TRANSLATIONS = {
+    "head north": "dumiretso pahilaga",
+    "head south": "dumiretso patimog",
+    "head east": "dumiretso pasilangan",
+    "head west": "dumiretso pakanluran",
+    "continue": "magpatuloy",
+    "keep left": "manatili sa kaliwa",
+    "keep right": "manatili sa kanan",
+    "turn left": "lumiko pakaliwa",
+    "turn right": "lumiko pakanan",
+    "slight left": "bahagyang lumiko pakaliwa",
+    "slight right": "bahagyang lumiko pakanan",
+    "make a u-turn": "mag-U-turn",
+    "u-turn": "U-turn",
+    "exit": "lumabas",
+    "take the exit": "dumaan sa labasan",
+    "merge": "sumanib sa daan",
+    "destination will be on the left": "ang pupuntahan ay nasa kaliwa",
+    "destination will be on the right": "ang pupuntahan ay nasa kanan",
+    "you have arrived": "nakarating na tayo",
+    "arrive": "dumating",
+}
+
+ACTION_PATTERN = re.compile(
+    "|".join(sorted((re.escape(action) for action in ACTION_TRANSLATIONS.keys()), key=len, reverse=True)),
+    flags=re.IGNORECASE,
+)
+
+DISTANCE_FIRST_PATTERNS = [
+    re.compile(
+        r"\b(?:in|after)\s+(?P<amount>\d+(?:\.\d+)?)\s*(?P<unit>meters?|meter|m|kilometers?|kilometer|km)\b[, ]*(?P<rest>.+)",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(?P<rest>.+?)\s+\b(?:in|after)\s+(?P<amount>\d+(?:\.\d+)?)\s*(?P<unit>meters?|meter|m|kilometers?|kilometer|km)\b",
+        flags=re.IGNORECASE,
+    ),
+]
+
+
 def _clean(s: str) -> str:
     s = re.sub(r"\s+", " ", s or "").strip()
     return s
 
+
+def _distance_to_tagalog(amount: str, unit: str) -> str:
+    """Convert metric distance snippets into Filipino-friendly phrasing."""
+    value = float(amount)
+    rendered = str(int(value)) if value.is_integer() else amount
+    unit_value = unit.lower()
+    if unit_value in {"km", "kilometer", "kilometers"}:
+        return f"{rendered} kilometro"
+    return f"{rendered} metro"
+
+
+def _translate_actions(text: str) -> str:
+    """Translate common imperative navigation verbs while preserving nearby road names."""
+    return ACTION_PATTERN.sub(lambda match: ACTION_TRANSLATIONS[match.group(0).lower()], text)
+
+
+def _rewrite_distance_first(text: str) -> str:
+    """Move distance cues to the front so instructions sound natural in Filipino."""
+    for pattern in DISTANCE_FIRST_PATTERNS:
+        match = pattern.search(text)
+        if not match:
+            continue
+
+        rest = _translate_actions(match.group("rest").strip(" ,"))
+        distance = _distance_to_tagalog(match.group("amount"), match.group("unit"))
+        return f"Sa {distance}, {rest}"
+
+    return text
+
+
 def tagalog_rewrite(text: str) -> str:
     """
-    Convert common English navigation phrases into pure Tagalog.
-    This is a best-effort rule-based rewrite (works great for Directions steps).
+    Convert common English navigation phrases into smoother Filipino instructions.
+    This keeps distance cues first, which sounds more natural for spoken guidance.
     """
     t = _clean(text)
 
-    # Remove HTML leftovers if any
     t = re.sub(r"<[^>]+>", "", t)
-
-    # Normalize quotes
     t = t.replace("’", "'").replace("“", '"').replace("”", '"')
 
-    # Common replacements (pure Tagalog)
+    t = _rewrite_distance_first(t)
+    t = _translate_actions(t)
+
     repl = [
-        (r"\bHead north\b", "Dumiretso pahilaga"),
-        (r"\bHead south\b", "Dumiretso patimog"),
-        (r"\bHead east\b", "Dumiretso pasilangan"),
-        (r"\bHead west\b", "Dumiretso pakanluran"),
-
-        (r"\bContinue\b", "Magpatuloy"),
-        (r"\bKeep left\b", "Manatili sa kaliwa"),
-        (r"\bKeep right\b", "Manatili sa kanan"),
-
-        (r"\bTurn left\b", "Kumaliwa"),
-        (r"\bTurn right\b", "Kumanan"),
-        (r"\bSlight left\b", "Bahagyang kumaliwa"),
-        (r"\bSlight right\b", "Bahagyang kumanan"),
-
-        (r"\bMake a U-turn\b", "Mag-U-turn"),
-        (r"\bU-turn\b", "U-turn"),
-
-        (r"\bExit\b", "Lumabas"),
-        (r"\bTake the exit\b", "Dumaan sa labasan"),
-        (r"\bMerge\b", "Sumanib sa daan"),
-
-        (r"\bDestination will be on the left\b", "Ang pupuntahan ay nasa kaliwa"),
-        (r"\bDestination will be on the right\b", "Ang pupuntahan ay nasa kanan"),
-        (r"\bYou have arrived\b", "Nakarating na tayo"),
-        (r"\bArrive\b", "Dumating"),
+        (r"\bonto\b", "papunta sa"),
+        (r"\btoward\b", "papunta sa"),
+        (r"\bvia\b", "dumaan sa"),
+        (r"^\bWalk\b", "Maglakad"),
+        (r"^\bGo\b", "Pumunta"),
     ]
 
     for pattern, replacement in repl:
         t = re.sub(pattern, replacement, t, flags=re.IGNORECASE)
 
-    # If it still starts with an English imperative, force Tagalog "Gawin ito:"
-    # (optional safety)
-    # Example: "Walk to..." => "Maglakad papunta sa..."
-    t = re.sub(r"^\bWalk\b", "Maglakad", t, flags=re.IGNORECASE)
-    t = re.sub(r"^\bGo\b", "Pumunta", t, flags=re.IGNORECASE)
-
-    # Final cleanup
     t = _clean(t)
 
-    # Add punctuation to help natural TTS
     if t and not t.endswith((".", "?", "!")):
         t += "."
 
-    return t
+    return t[:1].upper() + t[1:] if t else t
+
 
 def tagalog_distance_phrase(meters: int) -> str:
+    """Generate a natural Filipino lead-in for spoken distance alerts."""
     if meters < 15:
         return "Malapit na."
-    return f"Pagkalipas ng {meters} metro,"
+    return f"Sa {meters} metro,"

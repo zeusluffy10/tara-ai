@@ -210,7 +210,10 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
 
     speakLoud(text, {
       voice: settings.ttsVoice,
+      gender: settings.ttsGender,
       style: effectiveStyle,
+      emphasis: settings.ttsEmphasis,
+      pauseMs: settings.ttsPauseMs,
     });
   }
 
@@ -221,8 +224,7 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
     // ✅ If user tapped Next, remove intro to feel faster
     if (opts?.tapped) return "";
 
-    // ✅ Calm, not spammy
-    return "Makinig, ";
+    return "";
   }
 
   async function speakStep(
@@ -233,11 +235,11 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
     const step = steps[index];
     if (!step?.instruction) return;
 
-    let landmarkPrefix = "";
+    let landmarkPrefix = buildPrefix(opts);
 
     const ll = getStepLatLng(step);
 
-    if (ll) {
+    if (!currentLandmark && ll) {
       try {
         const name = await getLandmarkName(ll.lat, ll.lng);
 
@@ -248,11 +250,7 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
       } catch {}
     }
 
-    const prefix =
-      landmarkPrefix ||
-      (opts?.tapped ? "" : "Makinig, ");
-
-    const spoken = filipinoNavigator(prefix + step.instruction, distance);
+    const spoken = filipinoNavigator(landmarkPrefix + step.instruction, distance);
 
     speakGuidance(spoken);
   }
@@ -274,7 +272,7 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
     // Preview prompt
     if (d < PREVIEW_DISTANCE && d > FINAL_DISTANCE) {
       const prefix = currentLandmark ? `Malapit sa ${currentLandmark}, ` : "";
-      speakGuidance(`Sa ${Math.round(d)} metro, ${prefix}${step.instruction}`);
+      speakGuidance(filipinoNavigator(`${prefix}${step.instruction}`, Math.round(d)));
       announcedRef.current = true;
     }
 

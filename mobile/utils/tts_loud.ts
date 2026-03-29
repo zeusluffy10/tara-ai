@@ -2,10 +2,15 @@
 import { Audio } from "expo-av";
 import Constants from "expo-constants";
 
+import { TtsEmphasis, TtsGender } from "./voiceStore";
+
 export type VoiceStyle = "calm" | "warning";
 export type VoiceOptions = {
   voice?: string;
+  gender?: TtsGender;
   style?: VoiceStyle;
+  emphasis?: TtsEmphasis;
+  pauseMs?: number;
   volume?: number;
   lang?: "fil" | "en";
 };
@@ -45,8 +50,11 @@ export async function speakLoud(text: string, options?: VoiceOptions) {
     if (now - lastStartAt < 250) return;
     lastStartAt = now;
 
-    const voice = options?.voice ?? "alloy";
+    const voice = options?.voice;
+    const gender = options?.gender ?? "female";
     const style = options?.style ?? "calm";
+    const emphasis = options?.emphasis ?? "medium";
+    const pauseMs = options?.pauseMs ?? 280;
     const volume = options?.volume ?? 1.0;
     const lang = options?.lang ?? "fil";
 
@@ -54,12 +62,20 @@ export async function speakLoud(text: string, options?: VoiceOptions) {
       Constants.expoConfig?.extra?.API_BASE_URL ??
       "https://tara-ai-backend-swbp.onrender.com";
 
-    const url =
-      `${baseUrl}/tts?` +
-      `lang=${encodeURIComponent(lang)}` +
-      `&voice=${encodeURIComponent(voice)}` +
-      `&style=${encodeURIComponent(style)}` +
-      `&text=${encodeURIComponent(text)}`;
+    const params = new URLSearchParams({
+      lang,
+      gender,
+      style,
+      emphasis,
+      pause_ms: String(Math.max(80, Math.min(650, Math.round(pauseMs)))),
+      text,
+    });
+
+    if (voice) {
+      params.set("voice", voice);
+    }
+
+    const url = `${baseUrl}/tts?${params.toString()}`;
 
     // very important for iPhone loud playback after recording
     await forcePlaybackMode();
