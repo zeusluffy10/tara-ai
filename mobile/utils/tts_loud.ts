@@ -17,6 +17,7 @@ export type VoiceOptions = {
 
 let currentSound: Audio.Sound | null = null;
 let lastStartAt = 0;
+let playbackModeReady = false;
 
 export async function stopSpeakLoud() {
   if (!currentSound) return;
@@ -33,6 +34,8 @@ export async function stopSpeakLoud() {
 }
 
 async function forcePlaybackMode() {
+  if (playbackModeReady) return;
+
   await Audio.setAudioModeAsync({
     allowsRecordingIOS: false,
     playsInSilentModeIOS: true,
@@ -40,10 +43,15 @@ async function forcePlaybackMode() {
     shouldDuckAndroid: false,
     playThroughEarpieceAndroid: false,
   });
+
+  playbackModeReady = true;
 }
 
 export async function speakLoud(text: string, options?: VoiceOptions) {
   try {
+    const cleanedText = (text || "").trim();
+    if (!cleanedText) return;
+
     await stopSpeakLoud();
 
     const now = Date.now();
@@ -68,7 +76,7 @@ export async function speakLoud(text: string, options?: VoiceOptions) {
       style,
       emphasis,
       pause_ms: String(Math.max(80, Math.min(650, Math.round(pauseMs)))),
-      text,
+      text: cleanedText,
     });
 
     if (voice) {

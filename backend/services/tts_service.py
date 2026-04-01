@@ -4,6 +4,19 @@ from typing import Optional
 import httpx
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+_TTS_HTTP_CLIENT: Optional[httpx.AsyncClient] = None
+
+
+def _get_tts_http_client() -> httpx.AsyncClient:
+    """Return a shared AsyncClient to reuse TCP/TLS connections for faster TTS calls."""
+    global _TTS_HTTP_CLIENT
+    if _TTS_HTTP_CLIENT is None:
+        _TTS_HTTP_CLIENT = httpx.AsyncClient(
+            timeout=60.0,
+            limits=httpx.Limits(max_keepalive_connections=20, max_connections=100),
+            headers={"Connection": "keep-alive"},
+        )
+    return _TTS_HTTP_CLIENT
 
 async def generate_tts_audio_bytes(
     text: str,
@@ -26,8 +39,8 @@ async def generate_tts_audio_bytes(
         "voice": voice or "alloy",
     }
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        resp = await client.post(url, headers=headers, json=payload)
+    client = _get_tts_http_client()
+    resp = await client.post(url, headers=headers, json=payload)
 
     if resp.status_code != 200:
         try:
