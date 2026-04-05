@@ -24,6 +24,7 @@ from utils.maps_client import (
     autocomplete_place,
     place_details,
     get_directions,
+    find_transport_spots,
 )
 
 app = FastAPI()
@@ -66,6 +67,28 @@ def _get_latlng_from_loc(loc: dict) -> Tuple[float, float]:
     if not loc:
         return (None, None)
     return (loc.get("lat") or loc.get("latitude"), loc.get("lng") or loc.get("longitude"))
+
+
+def _attach_transport_spots(route_obj: Dict[str, Any], origin: str, destination: str, mode: str) -> Dict[str, Any]:
+    """Attach nearby sakayan spots for long walking routes."""
+    if mode != "walking" or not isinstance(route_obj, dict):
+        return route_obj
+
+    distance_value = ((route_obj.get("distance") or {}).get("value") if isinstance(route_obj.get("distance"), dict) else None)
+    if isinstance(distance_value, (int, float)) and distance_value < 1000:
+        route_obj["transport_spots"] = []
+        return route_obj
+
+    destination_loc = route_obj.get("destination") if isinstance(route_obj.get("destination"), dict) else destination
+
+    try:
+        spots = find_transport_spots(origin=origin, destination=destination_loc, radius_m=1400, max_results=6)
+    except Exception as e:
+        print("Transport spot detection failed:", e)
+        spots = []
+
+    route_obj["transport_spots"] = spots
+    return route_obj
 
 @app.get("/")
 def home():
@@ -130,6 +153,43 @@ def get_place(place_id: str = Query(..., description="Google place_id")):
 
 
 # -------------------------------------------------------
+# TRANSPORT SPOTS (jeep / trike / bus sakayan)
+# -------------------------------------------------------
+@app.get("/transport_spots")
+def transport_spots(
+    origin: str = Query(..., description="origin address or 'lat,lng'"),
+    destination: str = Query(..., description="destination address or 'lat,lng'"),
+    radius_m: int = Query(1400, ge=200, le=3000),
+    max_results: int = Query(6, ge=1, le=12),
+):
+    """Return nearby sakayan spots for jeep, trike, and bus."""
+    try:
+        spots = find_transport_spots(
+            origin=origin,
+            destination=destination,
+            radius_m=radius_m,
+            max_results=max_results,
+        )
+        return {
+            "status": "ok",
+            "origin": origin,
+            "destination": destination,
+            "count": len(spots),
+            "spots": spots,
+        }
+    except Exception as e:
+        print("/transport_spots failed:", e)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "code": "TRANSPORT_SPOTS_FAILED",
+                "message": "Could not detect transport spots.",
+            },
+        )
+
+
+# -------------------------------------------------------
 # DIRECTIONS / ROUTE
 # -------------------------------------------------------
 @app.get("/route")
@@ -187,6 +247,7 @@ def route(
 
     # If route_obj already contains steps, return it immediately
     if isinstance(route_obj, dict) and route_obj.get("steps"):
+        route_obj = _attach_transport_spots(route_obj, origin, destination, mode)
         return {"status": "ok", "route": route_obj}
 
     # At this point either route_obj is None or missing steps.
@@ -264,12 +325,15 @@ def route(
             "steps": steps
         })
 
+        unified = _attach_transport_spots(unified, origin, destination, mode)
+
         return {"status": "ok", "route": unified}
 
     except Exception as e:
         print("Error fetching Google Directions:", e)
         # fallback: if we previously had a route_obj without steps, return it
         if route_obj:
+            route_obj = _attach_transport_spots(route_obj, origin, destination, mode)
             return {"status": "ok", "route": route_obj}
         return JSONResponse(
             status_code=502,

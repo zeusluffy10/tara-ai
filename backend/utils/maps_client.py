@@ -18,6 +18,7 @@ GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
 DIRECTIONS_URL = "https://maps.googleapis.com/maps/api/directions/json"
 AUTOCOMPLETE_URL = "https://maps.googleapis.com/maps/api/place/autocomplete/json"
 PLACE_DETAILS_URL = "https://maps.googleapis.com/maps/api/place/details/json"
+PLACES_NEARBY_URL = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
 
 # small helper for retrying transient errors
 def _request_with_retries(url: str, params: dict, timeout: float = 6.0, retries: int = 2, backoff: float = 0.3):
@@ -71,6 +72,132 @@ def _format_location_param(loc: Union[str, Dict[str, float]]) -> str:
     if isinstance(loc, dict):
         return f"{loc.get('lat')},{loc.get('lng')}"
     return str(loc)
+
+
+def _parse_latlng(value: Union[str, Dict[str, float], None]) -> Optional[Dict[str, float]]:
+    """Parse {'lat','lng'} dict or 'lat,lng' string into numeric coordinates."""
+    if value is None:
+        return None
+
+    if isinstance(value, dict):
+        lat = value.get("lat")
+        lng = value.get("lng")
+        if lat is None or lng is None:
+            return None
+        return {"lat": float(lat), "lng": float(lng)}
+
+    if isinstance(value, str):
+        parts = [p.strip() for p in value.split(",")]
+        if len(parts) != 2:
+            return None
+        try:
+            return {"lat": float(parts[0]), "lng": float(parts[1])}
+        except ValueError:
+            return None
+
+    return None
+
+
+def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Compute straight-line distance in meters between two coordinates."""
+    import math
+
+    r = 6371000.0
+    p1 = math.radians(lat1)
+    p2 = math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lng2 - lng1)
+
+    a = math.sin(dp / 2.0) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2.0) ** 2
+    return r * 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
+
+
+def find_transport_spots(
+    origin: Union[str, Dict[str, float]],
+    destination: Union[str, Dict[str, float]],
+    radius_m: int = 1200,
+    max_results: int = 6,
+) -> List[Dict[str, Any]]:
+    """
+    Detect nearby sakayan spots (jeep, tricycle, bus) around origin/destination.
+    Returns a normalized list sorted by nearest to origin.
+    """
+    origin_coords = _parse_latlng(origin)
+    destination_coords = _parse_latlng(destination)
+
+    if origin_coords is None and isinstance(origin, str):
+        origin_coords = get_place_coordinates(origin)
+
+    if destination_coords is None and isinstance(destination, str):
+        destination_coords = get_place_coordinates(destination)
+
+    if not origin_coords and not destination_coords:
+        return []
+
+    centers = [c for c in [origin_coords, destination_coords] if c]
+    if not centers:
+        return []
+
+    search_plan = [
+        {"kind": "jeep", "keyword": "jeepney terminal", "type": "transit_station"},
+        {"kind": "trike", "keyword": "tricycle terminal", "type": "transit_station"},
+        {"kind": "bus", "keyword": "bus station", "type": "bus_station"},
+    ]
+
+    seen_place_ids = set()
+    collected: List[Dict[str, Any]] = []
+
+    for center in centers:
+        for search in search_plan:
+            params = {
+                "key": GOOGLE_MAPS_SERVER_KEY,
+                "location": f"{center['lat']},{center['lng']}",
+                "radius": int(max(200, min(radius_m, 3000))),
+                "keyword": search["keyword"],
+                "type": search["type"],
+            }
+            try:
+                data = _request_with_retries(PLACES_NEARBY_URL, params, timeout=6.0, retries=1)
+            except Exception as e:
+                print(f"[maps_client] Transport nearby search failed: {e}")
+                continue
+
+            if data.get("status") not in {"OK", "ZERO_RESULTS"}:
+                continue
+
+            for result in data.get("results", []):
+                place_id = result.get("place_id")
+                if not place_id or place_id in seen_place_ids:
+                    continue
+
+                loc = result.get("geometry", {}).get("location", {})
+                lat = loc.get("lat")
+                lng = loc.get("lng")
+                if lat is None or lng is None:
+                    continue
+
+                seen_place_ids.add(place_id)
+                entry = {
+                    "place_id": place_id,
+                    "kind": search["kind"],
+                    "name": result.get("name") or search["keyword"],
+                    "address": result.get("vicinity") or result.get("formatted_address"),
+                    "lat": float(lat),
+                    "lng": float(lng),
+                }
+
+                if origin_coords:
+                    entry["distance_from_origin_m"] = round(
+                        _haversine_m(origin_coords["lat"], origin_coords["lng"], entry["lat"], entry["lng"])
+                    )
+
+                collected.append(entry)
+
+    if not collected:
+        return []
+
+    collected.sort(key=lambda row: row.get("distance_from_origin_m", 10**9))
+    return collected[:max_results]
 
 
 # -----------------------------------------------------------
