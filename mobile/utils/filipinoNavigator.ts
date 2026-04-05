@@ -54,6 +54,7 @@ function expandRoadAbbreviations(text: string) {
     .replace(/(\b[A-Za-z0-9]+)\s+Dr\.?(?=(?:\s|,|$))/g, "$1 Drive")
     .replace(/(\b[A-Za-z0-9]+)\s+Ln\.?(?=(?:\s|,|$))/g, "$1 Lane")
     .replace(/(\b[A-Za-z0-9]+)\s+Hwy\.?(?=(?:\s|,|$))/g, "$1 Highway")
+    .replace(/\bAve\.?(?=(?:\s|,|$))/g, "Avenue")
     .replace(/\bSt\.?(?=(?:\s|,|$))/g, "Street");
 }
 

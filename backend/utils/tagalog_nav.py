@@ -70,6 +70,7 @@ def _expand_road_abbreviations(text: str) -> str:
     text = re.sub(r"(\b[A-Za-z0-9]+)\s+Dr\.?(?=(?:\s|,|$))", r"\1 Drive", text)
     text = re.sub(r"(\b[A-Za-z0-9]+)\s+Ln\.?(?=(?:\s|,|$))", r"\1 Lane", text)
     text = re.sub(r"(\b[A-Za-z0-9]+)\s+Hwy\.?(?=(?:\s|,|$))", r"\1 Highway", text)
+    text = re.sub(r"\bAve\.?(?=(?:\s|,|$))", "Avenue", text)
     text = re.sub(r"\bSt\.?(?=(?:\s|,|$))", "Street", text)
     return text
 
