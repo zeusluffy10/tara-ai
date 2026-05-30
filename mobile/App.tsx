@@ -4,10 +4,8 @@ import { useEffect } from "react";
 import { Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { NavigationContainer } from "@react-navigation/native";
 import { createStackNavigator } from "@react-navigation/stack";
-import { Audio } from "expo-av";
-
+import { AudioModule } from "expo-audio";
 import { RootStackParamList } from "./types/navigation";
-
 import SeniorModeHome from "./screens/SeniorModeHome";
 import VoiceRecorderScreen from "./screens/VoiceRecorderScreen";
 import VoiceConfirmScreen from "./screens/VoiceConfirmScreen";
@@ -21,10 +19,9 @@ const Stack = createStackNavigator<RootStackParamList>();
 export default function App() {
   useEffect(() => {
     // ✅ Make TTS audible even when iPhone is on Silent mode
-    Audio.setAudioModeAsync({
-      allowsRecordingIOS: false,
-      playsInSilentModeIOS: true,
-      staysActiveInBackground: false, // ✅ safer for App Store
+    AudioModule.setAudioModeAsync({
+      allowsRecording: false,
+      playsInSilentMode: true,
       shouldDuckAndroid: false,
       playThroughEarpieceAndroid: false,
     }).catch(console.warn);
@@ -54,7 +51,6 @@ export default function App() {
   );
 }
 
-// (optional) keep only if you still want a debug floating button later
 const styles = StyleSheet.create({
   debugContainer: {
     position: "absolute",

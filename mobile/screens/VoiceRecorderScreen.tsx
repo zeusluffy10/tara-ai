@@ -9,7 +9,7 @@ import {
   Animated,
 } from "react-native";
 import { StackScreenProps } from "@react-navigation/stack";
-import { Audio } from "expo-av";
+import { useAudioRecorder, AudioModule, RecordingPresets } from "expo-audio";
 import { LinearGradient } from "expo-linear-gradient";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Haptics from "expo-haptics";
@@ -19,38 +19,12 @@ import { postMultipart } from "../utils/api";
 import { RootStackParamList } from "../types/navigation";
 import { useSeniorMode } from "../context/SeniorModeContext";
 
-/* RECORDING OPTIONS (UNCHANGED, SAFE) */
-const RECORDING_OPTIONS = {
-  android: {
-    extension: ".m4a",
-    outputFormat:
-      (Audio as any).RECORDING_OPTION_ANDROID_OUTPUT_FORMAT_MPEG_4 || 2,
-    audioEncoder:
-      (Audio as any).RECORDING_OPTION_ANDROID_AUDIO_ENCODER_AAC || 3,
-    sampleRate: 44100,
-    numberOfChannels: 1,
-    bitRate: 128000,
-  },
-  ios: {
-    extension: ".m4a",
-    audioQuality:
-      (Audio as any).RECORDING_OPTION_IOS_AUDIO_QUALITY_HIGH || 0,
-    outputFormat:
-      (Audio as any).RECORDING_OPTION_IOS_AVFAUDIO || "lpcm",
-    sampleRate: 44100,
-    numberOfChannels: 1,
-    bitRate: 128000,
-    linearPCMBitDepth: 16,
-    linearPCMIsBigEndian: false,
-    linearPCMIsFloat: false,
-  },
-};
-
 type Props = StackScreenProps<RootStackParamList, "VoiceRecorder">;
 
 export default function VoiceRecorderScreen({ navigation }: Props) {
   const { settings } = useSeniorMode();
-  const [recording, setRecording] = useState<Audio.Recording | null>(null);
+  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const [isRecording, setIsRecording] = useState(false);
   const [loading, setLoading] = useState(false);
 
   /* PULSE ANIMATION */
@@ -76,23 +50,20 @@ export default function VoiceRecorderScreen({ navigation }: Props) {
   async function startRecording() {
     try {
       setLoading(true);
-      const perm = await Audio.requestPermissionsAsync();
-      if (perm.status !== "granted") {
+      const status = await AudioModule.requestRecordingPermissionsAsync();
+      if (!status.granted) {
         Alert.alert("Permission required", "Microphone access is required.");
         return;
       }
 
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
+      await AudioModule.setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
       });
 
-      const rec = new Audio.Recording();
-      await rec.prepareToRecordAsync(RECORDING_OPTIONS as any);
-      await rec.startAsync();
-
+      await audioRecorder.record();
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-      setRecording(rec);
+      setIsRecording(true);
     } catch (err) {
       Alert.alert("Recording error", String(err));
     } finally {
@@ -101,19 +72,19 @@ export default function VoiceRecorderScreen({ navigation }: Props) {
   }
 
   async function stopRecordingAndUpload() {
-    if (!recording) return;
+    if (!isRecording) return;
 
     setLoading(true);
     try {
-      await recording.stopAndUnloadAsync();
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-        shouldDuckAndroid: false,
-        playThroughEarpieceAndroid: false,
+      await audioRecorder.stop();
+      setIsRecording(false);
+
+      await AudioModule.setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
       });
-      const uri = recording.getURI();
+
+      const uri = audioRecorder.uri;
       if (!uri) throw new Error("Recording failed");
 
       const fileInfo = await FileSystem.getInfoAsync(uri);
@@ -134,12 +105,9 @@ export default function VoiceRecorderScreen({ navigation }: Props) {
     } catch (err: any) {
       Alert.alert("Upload error", err?.message ?? String(err));
     } finally {
-      setRecording(null);
       setLoading(false);
     }
   }
-
-  const isRecording = !!recording;
 
   return (
     <LinearGradient colors={["#EAF2FF", "#DDEBFF"]} style={styles.container}>
@@ -201,7 +169,6 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
   },
-
   header: {
     marginTop: 50,
     alignItems: "center",
@@ -219,7 +186,6 @@ const styles = StyleSheet.create({
     marginTop: 10,
     textAlign: "center",
   },
-
   heroContainer: {
     flex: 1,
     justifyContent: "center",
@@ -240,7 +206,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#0A84FF",
     alignItems: "center",
     justifyContent: "center",
-
     shadowColor: "#0A84FF",
     shadowOffset: { width: 0, height: 14 },
     shadowOpacity: 0.45,
@@ -251,7 +216,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#FF3B30",
     shadowColor: "#FF3B30",
   },
-
   actionText: {
     fontSize: 20,
     fontWeight: "600",
