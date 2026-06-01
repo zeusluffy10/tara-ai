@@ -5,6 +5,7 @@ import { Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native
 import { NavigationContainer } from "@react-navigation/native";
 import { createStackNavigator } from "@react-navigation/stack";
 import { AudioModule } from "expo-audio";
+import { Ionicons } from "@expo/vector-icons";
 import { RootStackParamList } from "./types/navigation";
 import SeniorModeHome from "./screens/SeniorModeHome";
 import VoiceRecorderScreen from "./screens/VoiceRecorderScreen";
@@ -18,7 +19,6 @@ const Stack = createStackNavigator<RootStackParamList>();
 
 export default function App() {
   useEffect(() => {
-    // ✅ Make TTS audible even when iPhone is on Silent mode
     AudioModule.setAudioModeAsync({
       allowsRecording: false,
       playsInSilentMode: true,
@@ -34,7 +34,23 @@ export default function App() {
           <Stack.Screen
             name="SeniorModeHome"
             component={SeniorModeHome}
-            options={{ title: "TARA - Senior Mode" }}
+            options={{
+              headerLeft: () => (
+                <View style={styles.headerLeft}>
+                  <Ionicons name="location" size={20} color="#0A84FF" />
+                  <Text style={styles.headerTitle}>TARA-AI</Text>
+                </View>
+              ),
+              headerRight: () => (
+                <View style={styles.headerRight}>
+                  <Ionicons name="checkmark-circle" size={16} color="#16A34A" />
+                  <Text style={styles.headerBadge}>Senior Mode ON</Text>
+                </View>
+              ),
+              headerTitle: () => null,
+              headerStyle: { backgroundColor: "#FFFFFF" },
+              headerShadowVisible: false,
+            }}
           />
           <Stack.Screen name="VoiceRecorder" component={VoiceRecorderScreen} />
           <Stack.Screen
@@ -52,6 +68,34 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
+  headerLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginLeft: 16,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#0A84FF",
+    marginLeft: 4,
+  },
+  headerRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F0FDF4",
+    borderWidth: 1,
+    borderColor: "#BBF7D0",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    marginRight: 16,
+  },
+  headerBadge: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#16A34A",
+    marginLeft: 4,
+  },
   debugContainer: {
     position: "absolute",
     right: 16,

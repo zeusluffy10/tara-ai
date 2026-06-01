@@ -9,7 +9,12 @@ import {
   Animated,
 } from "react-native";
 import { StackScreenProps } from "@react-navigation/stack";
-import { useAudioRecorder, AudioModule, RecordingPresets } from "expo-audio";
+import {
+  useAudioRecorder,
+  AudioModule,
+  RecordingPresets,
+  setAudioModeAsync,  // ← add this top-level import
+} from "expo-audio";
 import { LinearGradient } from "expo-linear-gradient";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Haptics from "expo-haptics";
@@ -18,6 +23,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { postMultipart } from "../utils/api";
 import { RootStackParamList } from "../types/navigation";
 import { useSeniorMode } from "../context/SeniorModeContext";
+
 
 type Props = StackScreenProps<RootStackParamList, "VoiceRecorder">;
 
@@ -56,12 +62,18 @@ export default function VoiceRecorderScreen({ navigation }: Props) {
         return;
       }
 
-      await AudioModule.setAudioModeAsync({
+      // 1) Switch iOS audio session to recording category
+      await setAudioModeAsync({
         allowsRecording: true,
         playsInSilentMode: true,
       });
 
-      await audioRecorder.record();
+      // 2) Allocate destination file + format
+      await audioRecorder.prepareToRecordAsync();
+
+      // 3) Begin capturing (no await needed)
+      audioRecorder.record();
+
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
       setIsRecording(true);
     } catch (err) {
@@ -76,6 +88,9 @@ export default function VoiceRecorderScreen({ navigation }: Props) {
 
     setLoading(true);
     try {
+      // Read URI before stop() - it's already set after record() starts
+      const uri = audioRecorder.uri;
+      
       await audioRecorder.stop();
       setIsRecording(false);
 
@@ -84,11 +99,12 @@ export default function VoiceRecorderScreen({ navigation }: Props) {
         playsInSilentMode: true,
       });
 
-      const uri = audioRecorder.uri;
-      if (!uri) throw new Error("Recording failed");
+      if (!uri) throw new Error("Audio file missing");
 
+      // Verify file exists and is not empty
       const fileInfo = await FileSystem.getInfoAsync(uri);
-      if (!fileInfo.exists) throw new Error("Audio file missing");
+      if (!fileInfo.exists || fileInfo.size === 0) 
+        throw new Error("Recording is empty");
 
       const formData = new FormData();
       formData.append("file", {
