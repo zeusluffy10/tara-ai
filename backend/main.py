@@ -426,7 +426,17 @@ async def transcribe_audio(file: UploadFile = File(...)):
             files = {
                 "file": (file.filename, f, file.content_type or "audio/m4a"),
             }
-            data = {"model": "whisper-1"}
+            data = {
+                "model": "whisper-1",
+                "language": "tl",  # Use "tl" not "fil" — correct ISO code for Tagalog
+                "temperature": "0",  # Eliminates hallucinations like "Thank you for watching"
+                "prompt": (
+                    "Philippine destination, landmark, street, or place name. "
+                    "Examples: FEU, UST, SM Manila, EDSA, Cubao, Quiapo, Divisoria, "
+                    "Ayala, Makati, Ortigas, BGC, Recto, Taft, España, Katipunan. "
+                    "The user is asking for navigation directions."
+                ),
+            }
             headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
             resp = requests.post("https://api.openai.com/v1/audio/transcriptions",
                                  headers=headers, files=files, data=data, timeout=240)
