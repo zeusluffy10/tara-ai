@@ -5,4 +5,5 @@ export type RootStackParamList = {
   SearchNavigateFlow: { initialQuery?: string; origin?: string } | undefined;
   NavigationMapScreen: { routeData: any };
   VoiceSettings: undefined;
+  Settings: undefined; 
 };

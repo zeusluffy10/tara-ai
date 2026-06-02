@@ -7,8 +7,9 @@ import {
   StyleSheet,
   Alert,
   Vibration,
+  ScrollView,
 } from "react-native";
-import MapView, { Marker, Polyline, LatLng, PROVIDER_GOOGLE } from "react-native-maps";
+import MapView, { Marker, Polyline, LatLng, PROVIDER_GOOGLE, Region } from "react-native-maps";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import * as Location from "expo-location";
@@ -28,23 +29,29 @@ const isDev = Boolean((globalThis as any).__DEV__);
 let lastInitialPromptSignature = "";
 let lastInitialPromptAt = 0;
 
+const MANILA_REGION: Region = {
+  latitude: 14.5995,
+  longitude: 120.9842,
+  latitudeDelta: 0.005,
+  longitudeDelta: 0.005,
+};
+
+const DEFAULT_ZOOM = 17;
+
 function shouldSuppressInitialPrompt(signature: string): boolean {
   const now = Date.now();
   const isDuplicate =
     signature === lastInitialPromptSignature && now - lastInitialPromptAt < 4000;
-
   if (isDev && isDuplicate) {
     console.debug("[NavigationMapScreen] Suppressed duplicate initial prompt", {
       signature,
       elapsedMs: now - lastInitialPromptAt,
     });
   }
-
   if (!isDuplicate) {
     lastInitialPromptSignature = signature;
     lastInitialPromptAt = now;
   }
-
   return isDuplicate;
 }
 
@@ -55,14 +62,12 @@ function getStepLatLng(step: any): { lat: number; lng: number } | null {
     step?.endLocation?.lat ??
     step?.end_location?.latitude ??
     step?.endLocation?.latitude;
-
   const lng =
     step?.lng ??
     step?.end_location?.lng ??
     step?.endLocation?.lng ??
     step?.end_location?.longitude ??
     step?.endLocation?.longitude;
-
   if (typeof lat !== "number" || typeof lng !== "number") return null;
   return { lat, lng };
 }
@@ -74,51 +79,78 @@ function getRouteDistanceMeters(routeData: any): number | null {
     routeData?.distanceValue,
     routeData?.routes?.[0]?.legs?.[0]?.distance?.value,
   ];
-
   for (const value of valueCandidates) {
-    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0)
       return Math.round(value);
-    }
   }
-
   const textCandidates = [
     routeData?.distance?.text,
     routeData?.distance_text,
     routeData?.distanceText,
     routeData?.routes?.[0]?.legs?.[0]?.distance?.text,
   ];
-
   for (const text of textCandidates) {
     if (typeof text !== "string") continue;
     const parsed = text.trim().toLowerCase().replace(/,/g, "");
-    const match = parsed.match(/(\d+(?:\.\d+)?)\s*(km|kilometer|kilometers|m|meter|meters)\b/);
+    const match = parsed.match(
+      /(\d+(?:\.\d+)?)\s*(km|kilometer|kilometers|m|meter|meters)\b/
+    );
     if (!match) continue;
-
     const amount = Number(match[1]);
     if (!Number.isFinite(amount) || amount <= 0) continue;
-
-    return /km|kilometer/.test(match[2]) ? Math.round(amount * 1000) : Math.round(amount);
+    return /km|kilometer/.test(match[2])
+      ? Math.round(amount * 1000)
+      : Math.round(amount);
   }
-
   return null;
 }
 
 export default function NavigationMapScreen({ route, navigation }: Props) {
   const { routeData } = route.params;
 
+  // ── FIX 1: Pre-decode polyline BEFORE first render ──
+  const preDecoded = routeData?.polyline ? decodePolyline(routeData.polyline) : [];
+  const firstPoint = preDecoded[0];
+  const lastPoint = preDecoded[preDecoded.length - 1];
+
   const mapRef = useRef<MapView | null>(null);
   const watchRef = useRef<Location.LocationSubscription | null>(null);
   const initSpeakTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   const announcedRef = useRef(false);
   const offRouteRef = useRef(false);
 
-  const [polyCoords, setPolyCoords] = useState<LatLng[]>([]);
+  const [polyCoords, setPolyCoords] = useState<LatLng[]>(preDecoded);
   const [userPos, setUserPos] = useState<LatLng | null>(null);
   const [stepIndex, setStepIndex] = useState(0);
   const [eta, setEta] = useState("1 min");
+  const [zoomLevel, setZoomLevel] = useState(DEFAULT_ZOOM);
 
   const destination = routeData?.destination;
+
+  // ── FIX 2: initialRegion centered between start & end of route ──
+  const initialRegion: Region = (() => {
+    if (firstPoint && lastPoint) {
+      const centerLat = (firstPoint.latitude + lastPoint.latitude) / 2;
+      const centerLng = (firstPoint.longitude + lastPoint.longitude) / 2;
+      const deltaLat = Math.abs(firstPoint.latitude - lastPoint.latitude) * 2.5 + 0.005;
+      const deltaLng = Math.abs(firstPoint.longitude - lastPoint.longitude) * 2.5 + 0.005;
+      return {
+        latitude: centerLat,
+        longitude: centerLng,
+        latitudeDelta: deltaLat,
+        longitudeDelta: deltaLng,
+      };
+    }
+    if (destination?.lat && destination?.lng) {
+      return {
+        latitude: destination.lat,
+        longitude: destination.lng,
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.02,
+      };
+    }
+    return MANILA_REGION;
+  })();
 
   const [currentSteps, setCurrentSteps] = useState<any[]>(routeData?.steps ?? []);
   const steps = currentSteps;
@@ -134,9 +166,7 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
 
   const lastRerouteRef = useRef<number>(0);
   const REROUTE_COOLDOWN_MS = 20_000;
-
   const [navMode] = useState<NavMode>("walking");
-
   const PREVIEW_DISTANCE = navMode === "driving" ? 120 : 60;
   const FINAL_DISTANCE = navMode === "driving" ? 40 : 15;
 
@@ -156,12 +186,26 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
     ? routeData.transport_spots.slice(0, 3)
     : [];
   const nearestSpotName = transportSpots[0]?.name;
-
   const routeDistanceMeters = getRouteDistanceMeters(routeData);
   const shouldSpeakTransportAdvice =
     navMode === "walking" &&
     typeof routeDistanceMeters === "number" &&
     routeDistanceMeters >= TRANSPORT_ADVICE_DISTANCE_M;
+
+  // ===========================
+  // ZOOM CONTROLS
+  // ===========================
+  async function handleZoomIn() {
+    const newZoom = Math.min(zoomLevel + 1, 21);
+    setZoomLevel(newZoom);
+    mapRef.current?.animateCamera({ zoom: newZoom }, { duration: 200 });
+  }
+
+  async function handleZoomOut() {
+    const newZoom = Math.max(zoomLevel - 1, 3);
+    setZoomLevel(newZoom);
+    mapRef.current?.animateCamera({ zoom: newZoom }, { duration: 200 });
+  }
 
   // ===========================
   // INIT
@@ -172,26 +216,42 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
       setSeniorSlowVoice(slow);
     })();
 
-    if (routeData?.polyline) {
-      const decoded = decodePolyline(routeData.polyline);
-      setPolyCoords(decoded);
-
+    if (preDecoded.length > 0) {
+      // FIX 3: reduced delay to 100ms + include user location in fit
+      setTimeout(async () => {
+        try {
+          const pos = await Location.getCurrentPositionAsync({});
+          const userCoord = {
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+          };
+          mapRef.current?.fitToCoordinates(
+            [userCoord, ...preDecoded],
+            { edgePadding: { top: 100, bottom: 320, left: 60, right: 60 }, animated: true }
+          );
+        } catch {
+          // Fallback: fit to route only
+          mapRef.current?.fitToCoordinates(preDecoded, {
+            edgePadding: { top: 80, bottom: 300, left: 60, right: 60 },
+            animated: true,
+          });
+        }
+      }, 100);
+    } else if (destination?.lat && destination?.lng) {
       setTimeout(() => {
-        mapRef.current?.fitToCoordinates(decoded, {
-          edgePadding: { top: 80, bottom: 300, left: 60, right: 60 },
-          animated: true,
-        });
-      }, 600);
+        mapRef.current?.animateCamera(
+          { center: { latitude: destination.lat, longitude: destination.lng }, zoom: 15 },
+          { duration: 300 }
+        );
+      }, 100);
     }
 
     if (routeData?.steps?.length) {
       setCurrentSteps(routeData.steps);
-
       initSpeakTimeoutRef.current = setTimeout(() => {
         const firstInstruction = routeData.steps?.[0]?.instruction ?? "";
         const signature = `${routeData?.polyline ?? ""}|${firstInstruction}`;
         if (shouldSuppressInitialPrompt(signature)) return;
-
         manualSpeakUntilRef.current = Date.now() + 3500;
         speakStep(0, undefined, { tapped: false });
       }, 500);
@@ -205,16 +265,10 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
       }
       stopLocationWatch();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ===========================
-  // CLEANUP
-  // ===========================
   useEffect(() => {
-    return () => {
-      stopSpeakLoud();
-    };
+    return () => { stopSpeakLoud(); };
   }, []);
 
   useEffect(() => {
@@ -230,24 +284,13 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
   // ===========================
   useEffect(() => {
     const step = steps[stepIndex];
-    if (!step) {
-      setCurrentLandmark(null);
-      return;
-    }
-
+    if (!step) { setCurrentLandmark(null); return; }
     const ll = getStepLatLng(step);
-    if (!ll) {
-      setCurrentLandmark(null);
-      return;
-    }
-
+    if (!ll) { setCurrentLandmark(null); return; }
     const key = `${ll.lat.toFixed(5)},${ll.lng.toFixed(5)}`;
-
     if (lastLandmarkKeyRef.current === key) return;
     lastLandmarkKeyRef.current = key;
-
     updateLandmark(null);
-
     getLandmarkName(ll.lat, ll.lng)
       .then((name) => updateLandmark(name))
       .catch(() => updateLandmark(null));
@@ -262,19 +305,10 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
       Alert.alert("Permission required", "Location is needed.");
       return;
     }
-
     watchRef.current = await Location.watchPositionAsync(
-      {
-        accuracy: Location.Accuracy.Highest,
-        distanceInterval: 3,
-        timeInterval: 1000,
-      },
+      { accuracy: Location.Accuracy.Highest, distanceInterval: 3, timeInterval: 1000 },
       (pos) => {
-        const newPos = {
-          latitude: pos.coords.latitude,
-          longitude: pos.coords.longitude,
-        };
-
+        const newPos = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
         setUserPos(newPos);
         updateEta(newPos, pos.coords.speed ?? 0);
         handleDistanceAnnouncements(newPos);
@@ -295,7 +329,6 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
     const now = Date.now();
     if (now - lastSpeakRef.current < 800) return;
     lastSpeakRef.current = now;
-
     speakLoud(text, {
       voice: settings.ttsVoice,
       gender: settings.ttsGender,
@@ -305,10 +338,9 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
     });
   }
 
-  function buildPrefix(opts?: { tapped?: boolean; forceLandmark?: boolean }) {
+  function buildPrefix(opts?: { tapped?: boolean }) {
     const landmark = currentLandmarkRef.current;
     if (landmark) return `Malapit sa ${landmark}, `;
-    if (opts?.tapped) return "";
     return "";
   }
 
@@ -319,25 +351,16 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
   ) {
     const step = steps[index];
     if (!step?.instruction) return;
-
     let landmarkPrefix = buildPrefix(opts);
-
     const ll = getStepLatLng(step);
-
     if (!currentLandmarkRef.current && ll) {
       try {
         const name = await getLandmarkName(ll.lat, ll.lng);
-
-        if (name) {
-          landmarkPrefix = `Malapit sa ${name}, `;
-          updateLandmark(name);
-        }
+        if (name) { landmarkPrefix = `Malapit sa ${name}, `; updateLandmark(name); }
       } catch {}
     }
-
     const spoken = filipinoNavigator(landmarkPrefix + step.instruction, distance);
     const isInitialStep = index === 0 && !opts?.tapped;
-
     if (isInitialStep && shouldSpeakTransportAdvice && !transportAdviceSpokenRef.current) {
       transportAdviceSpokenRef.current = true;
       const spotLine = nearestSpotName
@@ -346,7 +369,6 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
       speakGuidance(`${TRANSPORT_ADVICE_TEXT}${spotLine} ${spoken}`);
       return;
     }
-
     speakGuidance(spoken);
   }
 
@@ -357,22 +379,15 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
     if (Date.now() < manualSpeakUntilRef.current) return;
     const step = steps[stepIndex];
     if (!step || announcedRef.current) return;
-
     const target = getStepLatLng(step);
     if (!target) return;
-
     const d = haversine(pos.latitude, pos.longitude, target.lat, target.lng);
-
     if (d < PREVIEW_DISTANCE && d > FINAL_DISTANCE) {
       const prefix = currentLandmarkRef.current ? `Malapit sa ${currentLandmarkRef.current}, ` : "";
       speakGuidance(filipinoNavigator(`${prefix}${step.instruction}`, Math.round(d)));
       announcedRef.current = true;
     }
-
-    if (d < FINAL_DISTANCE) {
-      speakStep(stepIndex);
-      announcedRef.current = true;
-    }
+    if (d < FINAL_DISTANCE) { speakStep(stepIndex); announcedRef.current = true; }
   }
 
   // ===========================
@@ -380,24 +395,16 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
   // ===========================
   function detectOffRoute(pos: LatLng) {
     if (polyCoords.length === 0) return;
-
     const nearest = polyCoords.reduce((min, p) => {
       const d = haversine(pos.latitude, pos.longitude, p.latitude, p.longitude);
       return d < min ? d : min;
     }, Infinity);
-
     const now = Date.now();
-
-    if (
-      nearest > 40 &&
-      !offRouteRef.current &&
-      now - lastRerouteRef.current > REROUTE_COOLDOWN_MS
-    ) {
+    if (nearest > 40 && !offRouteRef.current && now - lastRerouteRef.current > REROUTE_COOLDOWN_MS) {
       offRouteRef.current = true;
       lastRerouteRef.current = now;
       speakGuidance("Sandali lang, inaayos ko ulit ang daan.");
     }
-
     if (nearest < 20) offRouteRef.current = false;
   }
 
@@ -406,7 +413,6 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
   // ===========================
   function updateEta(pos: LatLng, speed: number) {
     if (!destination) return;
-
     const dist = haversine(pos.latitude, pos.longitude, destination.lat, destination.lng);
     const effectiveSpeed = speed > 0.6 ? speed : 1.3;
     const mins = Math.max(1, Math.round(dist / effectiveSpeed / 60));
@@ -418,32 +424,22 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
   // ===========================
   async function handleBack() {
     if (stepIndex <= 0) return;
-
     Vibration.vibrate(40);
     manualSpeakUntilRef.current = Date.now() + 2000;
-
     const previous = stepIndex - 1;
     currentLandmarkRef.current = null;
     setStepIndex(previous);
-
-    setTimeout(() => {
-      speakStep(previous, undefined, { tapped: true });
-    }, 350);
+    setTimeout(() => { speakStep(previous, undefined, { tapped: true }); }, 350);
   }
 
   async function handleNext() {
     Vibration.vibrate(60);
-
     manualSpeakUntilRef.current = Date.now() + 2000;
-
     if (stepIndex < steps.length - 1) {
       const next = stepIndex + 1;
       currentLandmarkRef.current = null;
       setStepIndex(next);
-
-      setTimeout(() => {
-        speakStep(next, undefined, { tapped: true });
-      }, 500);
+      setTimeout(() => { speakStep(next, undefined, { tapped: true }); }, 500);
     } else {
       await stopSpeakLoud();
       navigation.navigate("SeniorModeHome");
@@ -453,30 +449,16 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
   const canGoBack = stepIndex > 0;
   const isLastStep = stepIndex >= steps.length - 1;
   const currentInstruction = steps[stepIndex]?.instruction ?? "Magpatuloy";
-
-  // ===========================
-  // BLOCK 2 — Derived values + handleRepeatGuidance
-  // ===========================
   const totalSteps = Math.max(1, steps.length);
   const currentStepNumber = Math.min(stepIndex + 1, totalSteps);
   const progress = currentStepNumber / totalSteps;
-
   const stepMode = getStepTravelMode(steps[stepIndex], navMode);
   const stepIcon = getStepIconName(stepMode);
-
   const trafficLevel = getTrafficLevel(routeData);
   const trafficColor =
-    trafficLevel === "heavy"
-      ? "#E5484D"
-      : trafficLevel === "moderate"
-      ? "#F5A524"
-      : "#16A34A";
+    trafficLevel === "heavy" ? "#E5484D" : trafficLevel === "moderate" ? "#F5A524" : "#16A34A";
   const trafficLabel =
-    trafficLevel === "heavy"
-      ? "Heavy traffic"
-      : trafficLevel === "moderate"
-      ? "Moderate traffic"
-      : "Light traffic";
+    trafficLevel === "heavy" ? "Heavy traffic" : trafficLevel === "moderate" ? "Moderate traffic" : "Light traffic";
 
   function handleRepeatGuidance() {
     Vibration.vibrate(20);
@@ -489,11 +471,7 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
   // ===========================
   useEffect(() => {
     if (userPos && mapRef.current) {
-      mapRef.current.animateCamera({
-        center: userPos,
-        zoom: 17,
-        pitch: 45,
-      });
+      mapRef.current.animateCamera({ center: userPos, zoom: zoomLevel, pitch: 45 });
     }
   }, [userPos]);
 
@@ -502,126 +480,153 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
   // ===========================
   return (
     <View style={styles.container}>
-      <MapView
-        ref={mapRef}
-        provider={PROVIDER_GOOGLE}
-        style={styles.map}
-        showsUserLocation
-        followsUserLocation
-      >
-        {polyCoords.length > 0 && (
-          <Polyline coordinates={polyCoords} strokeWidth={6} strokeColor="#0A84FF" />
-        )}
+      {/* MAP */}
+      <View style={styles.mapContainer}>
+        <MapView
+          ref={mapRef}
+          provider={PROVIDER_GOOGLE}
+          style={styles.map}
+          initialRegion={initialRegion}
+          showsUserLocation
+          followsUserLocation={false}
+        >
+          {polyCoords.length > 0 && (
+            <Polyline coordinates={polyCoords} strokeWidth={6} strokeColor="#0A84FF" />
+          )}
+          {destination && (
+            <Marker
+              coordinate={{ latitude: destination.lat, longitude: destination.lng }}
+            />
+          )}
+        </MapView>
 
-        {destination && (
-          <Marker
-            coordinate={{
-              latitude: destination.lat,
-              longitude: destination.lng,
-            }}
-          />
-        )}
-      </MapView>
-
-      <LinearGradient
-        colors={["rgba(234,242,255,0.95)", "transparent"]}
-        style={styles.topFade}
-      />
-
-      <LinearGradient colors={["#FFFFFF", "#F4F8FF"]} style={styles.bottomCard}>
-        {/* Landmark chip */}
-        <View style={styles.landmarkChip}>
-          <Ionicons name="location-outline" size={16} color="#0A84FF" />
-          <Text style={styles.landmarkText}>
-            {currentLandmark ? `Malapit sa ${currentLandmark}` : "Naghahanap ng landmark…"}
-          </Text>
-        </View>
-
-        {/* Smart transport icon */}
-        <View style={styles.iconCircle}>
-          <Ionicons name={stepIcon} size={28} color="#0A84FF" />
-        </View>
-
-        {/* Current instruction */}
-        <Text style={[styles.instruction, settings.bigText && { fontSize: 22 }]}>
-          {currentInstruction}
-        </Text>
-
-        {/* Google Maps-style progress card */}
-        <View style={styles.progressCard}>
-          <Text style={[
-            styles.progressTitle,
-            currentStepNumber === totalSteps 
-              ? { color: "#16A34A", fontWeight: "800" } 
-              : { color: "#1C1C1E" }
-          ]}>
-            {currentStepNumber === totalSteps ? "You have arrived! 🎉" : "You are on your way"}
-          </Text>
-
-          <View style={styles.progressRow}>
-            <View style={styles.progressBarTrack}>
-              <View style={[styles.progressBarFill, { width: `${progress * 100}%` }]} />
-            </View>
-            <Text style={styles.progressCounter}>
-              {currentStepNumber} of {totalSteps}
-            </Text>
-          </View>
-
-          <View style={styles.metaRow}>
-            <View style={styles.metaItem}>
-              <Ionicons name={stepIcon} size={14} color="#475569" />
-              <Text style={styles.metaText}>{formatDistance(routeDistanceMeters)}</Text>
-            </View>
-            <Text style={styles.metaDot}>·</Text>
-            <View style={styles.metaItem}>
-              <Ionicons name="time-outline" size={14} color="#475569" />
-              <Text style={styles.metaText}>ETA {eta}</Text>
-            </View>
-            <Text style={styles.metaDot}>·</Text>
-            <View style={styles.metaItem}>
-              <View style={[styles.trafficDot, { backgroundColor: trafficColor }]} />
-              <Text style={[styles.metaText, { color: trafficColor, marginLeft: 6 }]}>
-                {trafficLabel}
-              </Text>
-            </View>
-          </View>
-
-          <TouchableOpacity
-            style={styles.repeatBtn}
-            onPress={handleRepeatGuidance}
-            accessibilityRole="button"
-            accessibilityLabel="Tap to hear guidance again"
-          >
-            <View style={styles.repeatIconCircle}>
-              <Ionicons name="volume-high" size={22} color="#FFFFFF" />
-            </View>
-            <Text style={styles.repeatText}>Tap to hear guidance again</Text>
+        {/* ZOOM CONTROLS */}
+        <View style={styles.zoomControls}>
+          <TouchableOpacity style={styles.zoomBtn} onPress={handleZoomIn} activeOpacity={0.8}>
+            <Ionicons name="add" size={24} color="#1557C0" />
+          </TouchableOpacity>
+          <View style={styles.zoomDivider} />
+          <TouchableOpacity style={styles.zoomBtn} onPress={handleZoomOut} activeOpacity={0.8}>
+            <Ionicons name="remove" size={24} color="#1557C0" />
           </TouchableOpacity>
         </View>
 
-        {/* Sakayan spots */}
-        {shouldSpeakTransportAdvice && transportSpots.length > 0 && (
-          <View style={styles.sakayanListCard}>
-            <Text style={styles.sakayanTitle}>Nearby Sakayan Spots</Text>
-            {transportSpots.map((spot: any, index: number) => (
-              <View key={`${spot.place_id ?? spot.name}-${index}`} style={styles.sakayanRow}>
-                <View style={[styles.sakayanIconBadge, getSakayanIconBadgeStyle(spot.kind)]}>
-                  <Ionicons name={getSakayanIconName(spot.kind)} size={13} color={getSakayanIconColor(spot.kind)} />
-                </View>
-                <Text style={styles.sakayanItem}>{index + 1}. {spot.name}</Text>
+        {/* RE-CENTER BUTTON */}
+        <TouchableOpacity
+          style={styles.recenterBtn}
+          activeOpacity={0.8}
+          onPress={() => {
+            if (userPos) {
+              mapRef.current?.animateCamera(
+                { center: userPos, zoom: DEFAULT_ZOOM, pitch: 45 },
+                { duration: 500 }
+              );
+            }
+          }}
+        >
+          <Ionicons name="locate" size={20} color="#1557C0" />
+        </TouchableOpacity>
+      </View>
+
+      {/* BOTTOM CARD */}
+      <LinearGradient colors={["#FFFFFF", "#F4F8FF"]} style={styles.bottomCard}>
+
+        {/* SCROLLABLE CONTENT */}
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.scrollContent}
+        >
+          {/* Landmark chip */}
+          <View style={styles.landmarkChip}>
+            <Ionicons name="location-outline" size={16} color="#0A84FF" />
+            <Text style={styles.landmarkText}>
+              {currentLandmark ? `Malapit sa ${currentLandmark}` : "Naghahanap ng landmark…"}
+            </Text>
+          </View>
+
+          {/* Smart transport icon */}
+          <View style={styles.iconCircle}>
+            <Ionicons name={stepIcon} size={28} color="#0A84FF" />
+          </View>
+
+          {/* Current instruction */}
+          <Text
+            style={[styles.instruction, settings.bigText && { fontSize: 19 }]}
+            numberOfLines={3}
+            adjustsFontSizeToFit
+            minimumFontScale={0.7}
+          >
+            {currentInstruction}
+          </Text>
+
+          {/* Progress card */}
+          <View style={styles.progressCard}>
+            <Text style={[
+              styles.progressTitle,
+              currentStepNumber === totalSteps
+                ? { color: "#16A34A", fontWeight: "800" }
+                : { color: "#1C1C1E" },
+            ]}>
+              {currentStepNumber === totalSteps ? "You have arrived! 🎉" : "You are on your way"}
+            </Text>
+            <View style={styles.progressRow}>
+              <View style={styles.progressBarTrack}>
+                <View style={[styles.progressBarFill, { width: `${progress * 100}%` }]} />
               </View>
-            ))}
+              <Text style={styles.progressCounter}>
+                {currentStepNumber} of {totalSteps}
+              </Text>
+            </View>
+            <View style={styles.metaRow}>
+              <View style={styles.metaItem}>
+                <Ionicons name={stepIcon} size={14} color="#475569" />
+                <Text style={styles.metaText}>{formatDistance(routeDistanceMeters)}</Text>
+              </View>
+              <Text style={styles.metaDot}>·</Text>
+              <View style={styles.metaItem}>
+                <Ionicons name="time-outline" size={14} color="#475569" />
+                <Text style={styles.metaText}>ETA {eta}</Text>
+              </View>
+              <Text style={styles.metaDot}>·</Text>
+              <View style={styles.metaItem}>
+                <View style={[styles.trafficDot, { backgroundColor: trafficColor }]} />
+                <Text style={[styles.metaText, { color: trafficColor, marginLeft: 6 }]}>
+                  {trafficLabel}
+                </Text>
+              </View>
+            </View>
+            <TouchableOpacity style={styles.repeatBtn} onPress={handleRepeatGuidance}>
+              <View style={styles.repeatIconCircle}>
+                <Ionicons name="volume-high" size={22} color="#FFFFFF" />
+              </View>
+              <Text style={styles.repeatText}>Tap to hear guidance again</Text>
+            </TouchableOpacity>
           </View>
-        )}
 
-        {shouldSpeakTransportAdvice && transportSpots.length === 0 && (
-          <View style={styles.sakayanListCard}>
-            <Text style={styles.sakayanTitle}>Nearby Sakayan Spots</Text>
-            <Text style={styles.sakayanEmptyText}>No nearby jeep/trike/bus spot found yet.</Text>
-          </View>
-        )}
+          {/* Sakayan spots */}
+          {shouldSpeakTransportAdvice && transportSpots.length > 0 && (
+            <View style={styles.sakayanListCard}>
+              <Text style={styles.sakayanTitle}>Nearby Sakayan Spots</Text>
+              {transportSpots.map((spot: any, index: number) => (
+                <View key={`${spot.place_id ?? spot.name}-${index}`} style={styles.sakayanRow}>
+                  <View style={[styles.sakayanIconBadge, getSakayanIconBadgeStyle(spot.kind)]}>
+                    <Ionicons name={getSakayanIconName(spot.kind)} size={13} color={getSakayanIconColor(spot.kind)} />
+                  </View>
+                  <Text style={styles.sakayanItem}>{index + 1}. {spot.name}</Text>
+                </View>
+              ))}
+            </View>
+          )}
 
-        {/* Nav buttons */}
+          {shouldSpeakTransportAdvice && transportSpots.length === 0 && (
+            <View style={styles.sakayanListCard}>
+              <Text style={styles.sakayanTitle}>Nearby Sakayan Spots</Text>
+              <Text style={styles.sakayanEmptyText}>No nearby jeep/trike/bus spot found yet.</Text>
+            </View>
+          )}
+        </ScrollView>
+
+        {/* NAV BUTTONS — always pinned at bottom */}
         <View style={styles.navButtonsRow}>
           <TouchableOpacity
             style={[styles.backBtn, !canGoBack && styles.backBtnDisabled]}
@@ -643,7 +648,7 @@ export default function NavigationMapScreen({ route, navigation }: Props) {
 }
 
 // ===========================
-// BLOCK 1 — Helper functions
+// HELPERS
 // ===========================
 function formatDistance(meters: number | null): string {
   if (typeof meters !== "number" || meters <= 0) return "—";
@@ -664,12 +669,8 @@ function getStepIconName(mode: NavMode): "walk" | "car-sport" {
 
 type TrafficLevel = "light" | "moderate" | "heavy";
 function getTrafficLevel(routeData: any): TrafficLevel {
-  const normal =
-    routeData?.routes?.[0]?.legs?.[0]?.duration?.value ??
-    routeData?.duration?.value;
-  const traffic =
-    routeData?.routes?.[0]?.legs?.[0]?.duration_in_traffic?.value ??
-    routeData?.duration_in_traffic?.value;
+  const normal = routeData?.routes?.[0]?.legs?.[0]?.duration?.value ?? routeData?.duration?.value;
+  const traffic = routeData?.routes?.[0]?.legs?.[0]?.duration_in_traffic?.value ?? routeData?.duration_in_traffic?.value;
   if (typeof normal === "number" && typeof traffic === "number" && normal > 0) {
     const ratio = traffic / normal;
     if (ratio >= 1.4) return "heavy";
@@ -683,13 +684,9 @@ function haversine(lat1: number, lon1: number, lat2: number, lon2: number) {
   const toRad = (v: number) => (v * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
-
   const a =
     Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) *
-      Math.cos(toRad(lat2)) *
-      Math.sin(dLon / 2) ** 2;
-
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
@@ -715,19 +712,59 @@ function getSakayanIconBadgeStyle(kind?: string) {
 // STYLES
 // ===========================
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  map: { flex: 1 },
-
-  topFade: {
-    position: "absolute",
-    top: 0,
-    height: 120,
+  container: {
+    flex: 1,
+    flexDirection: "column",
+  },
+  mapContainer: {
+    height: "45%",
     width: "100%",
   },
-
-  bottomCard: {
+  map: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  zoomControls: {
     position: "absolute",
-    bottom: 0,
+    right: 14,
+    bottom: 20,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
+    elevation: 5,
+    overflow: "hidden",
+  },
+  zoomBtn: {
+    width: 44,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  zoomDivider: {
+    height: 1,
+    backgroundColor: "#E2E8F0",
+    marginHorizontal: 8,
+  },
+  recenterBtn: {
+    position: "absolute",
+    right: 14,
+    bottom: 124,
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
+    elevation: 5,
+  },
+  bottomCard: {
+    flex: 1,
     width: "100%",
     padding: 20,
     paddingBottom: 30,
@@ -739,7 +776,9 @@ const styles = StyleSheet.create({
     shadowRadius: 20,
     elevation: 12,
   },
-
+  scrollContent: {
+    paddingBottom: 8,
+  },
   landmarkChip: {
     alignSelf: "center",
     flexDirection: "row",
@@ -755,7 +794,6 @@ const styles = StyleSheet.create({
     color: "#0A84FF",
     fontWeight: "700",
   },
-
   iconCircle: {
     width: 56,
     height: 56,
@@ -766,16 +804,14 @@ const styles = StyleSheet.create({
     alignSelf: "center",
     marginBottom: 12,
   },
-
   instruction: {
-    fontSize: 20,
+    fontSize: 17,
     fontWeight: "800",
     color: "#1C1C1E",
     textAlign: "center",
     marginBottom: 8,
+    lineHeight: 22,
   },
-
-  // BLOCK 4 — New styles
   progressCard: {
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
@@ -869,7 +905,6 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#0A63CC",
   },
-
   sakayanListCard: {
     backgroundColor: "#F4F8FF",
     borderWidth: 1,
@@ -879,20 +914,17 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     marginBottom: 10,
   },
-
   sakayanTitle: {
     fontSize: 13,
     fontWeight: "700",
     color: "#0A63CC",
     marginBottom: 4,
   },
-
   sakayanRow: {
     flexDirection: "row",
     alignItems: "center",
     marginBottom: 4,
   },
-
   sakayanIconBadge: {
     width: 20,
     height: 20,
@@ -901,23 +933,19 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginRight: 6,
   },
-
   sakayanItem: {
     fontSize: 13,
     color: "#1F2937",
   },
-
   sakayanEmptyText: {
     fontSize: 13,
     color: "#6B7280",
   },
-
   navButtonsRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
   },
-
   backBtn: {
     flex: 1,
     flexDirection: "row",
@@ -929,23 +957,19 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#BBD8FF",
   },
-
   backBtnDisabled: {
     backgroundColor: "#F3F4F6",
     borderColor: "#E5E7EB",
   },
-
   backText: {
     marginLeft: 6,
     fontSize: 17,
     fontWeight: "700",
     color: "#0A63CC",
   },
-
   backTextDisabled: {
     color: "#94A3B8",
   },
-
   nextBtn: {
     flex: 1,
     flexDirection: "row",
@@ -955,11 +979,17 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderRadius: 18,
   },
-
   nextText: {
     marginLeft: 8,
     fontSize: 18,
     fontWeight: "700",
     color: "#FFF",
+  },
+  topFade: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 60,
   },
 });

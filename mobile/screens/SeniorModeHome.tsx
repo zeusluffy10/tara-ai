@@ -6,57 +6,104 @@ import {
   StyleSheet,
   Switch,
   Animated,
+  SafeAreaView,
+  ScrollView,
+  StatusBar,
+  Platform,
 } from "react-native";
 import { StackScreenProps } from "@react-navigation/stack";
 import { Ionicons } from "@expo/vector-icons";
-import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
 
 import { useSeniorMode } from "../context/SeniorModeContext";
 import { emergencyCall, shareLiveLocation } from "../components/EmergencyShare";
 import { RootStackParamList } from "../types/navigation";
-import { Linking, Alert } from "react-native";
 
 type Props = StackScreenProps<RootStackParamList, "SeniorModeHome">;
+
+/* ---------- HELPERS ---------- */
+
+const getGreeting = (): string => {
+  const hour = new Date().getHours();
+  if (hour < 12) return "Good morning!";
+  if (hour < 18) return "Good afternoon!";
+  return "Good evening!";
+};
+
+const getDate = (): string =>
+  new Date().toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  });
+
+/* ---------- MAIN SCREEN ---------- */
 
 export default function SeniorModeHome({ navigation }: Props) {
   const { settings, setSettings } = useSeniorMode();
 
-  /* HERO PULSE ANIMATION */
-  const pulse = useRef(new Animated.Value(1)).current;
+  const ring1 = useRef(new Animated.Value(0)).current;
+  const ring2 = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, {
-          toValue: 1.06,
-          duration: 900,
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulse, {
-          toValue: 1,
-          duration: 900,
-          useNativeDriver: true,
-        }),
-      ])
-    ).start();
+    const animate = (val: Animated.Value, delay: number) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(delay),
+          Animated.timing(val, {
+            toValue: 1,
+            duration: 2200,
+            useNativeDriver: true,
+          }),
+          Animated.timing(val, {
+            toValue: 0,
+            duration: 0,
+            useNativeDriver: true,
+          }),
+        ])
+      ).start();
+
+    animate(ring1, 0);
+    animate(ring2, 500);
   }, []);
 
-  return (
-    <LinearGradient
-      colors={["#EAF2FF", "#DDEBFF"]}
-      style={styles.safe}
-    >
-      {/* HEADER */}
-      <View style={styles.header}>
-        <Text style={styles.appName}>TARA-AI</Text>
-        <Text style={styles.subtitle}>Navigation Assistant</Text>
-      </View>
+  const ringStyle = (val: Animated.Value) => ({
+    opacity: val.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.4, 0, 0] }),
+    transform: [
+      { scale: val.interpolate({ inputRange: [0, 1], outputRange: [1, 1.22] }) },
+    ],
+  });
 
-      {/* HERO MIC */}
-      <View style={styles.heroContainer}>
-        <View style={styles.glow} />
-        <Animated.View style={{ transform: [{ scale: pulse }] }}>
+  return (
+    <SafeAreaView style={styles.safe}>
+      <StatusBar barStyle="light-content" backgroundColor="#1A1A2E" />
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* ── HEADER ── */}
+        <View style={styles.header}>
+          <View style={styles.headerLeft}>
+            <Ionicons name="location" size={20} color="#7C9FFF" />
+            <Text style={styles.appName}>TARA-AI</Text>
+          </View>
+          <View style={styles.headerBadge}>
+            <Ionicons name="accessibility" size={13} color="#7C9FFF" />
+            <Text style={styles.badgeText}>Senior Mode ON</Text>
+          </View>
+        </View>
+
+        {/* ── GREETING ── */}
+        <View style={styles.greetingBlock}>
+          <Text style={styles.dateText}>{getDate()}</Text>
+          <Text style={styles.greetingText}>{getGreeting()}</Text>
+          <Text style={styles.subtitleText}>Where would you like to go?</Text>
+        </View>
+
+        {/* ── HERO MIC BUTTON ── */}
+        <View style={styles.heroContainer}>
+          <Animated.View style={[styles.ringOuter, ringStyle(ring2)]} />
+          <Animated.View style={[styles.ringInner, ringStyle(ring1)]} />
           <TouchableOpacity
             activeOpacity={0.85}
             style={styles.heroButton}
@@ -65,83 +112,122 @@ export default function SeniorModeHome({ navigation }: Props) {
               navigation.navigate("VoiceRecorder");
             }}
           >
-            <Ionicons name="mic" size={52} color="#FFF" />
-            <Text style={styles.heroText}>Speak Destination</Text>
+            <Ionicons name="mic" size={42} color="#FFF" />
+            <Text style={styles.heroText}>Speak</Text>
           </TouchableOpacity>
-        </Animated.View>
-      </View>
+        </View>
 
-      {/* SECONDARY ACTION */}
-      <TouchableOpacity
-        style={styles.secondaryButton}
-        onPress={() =>
-          navigation.navigate("SearchNavigateFlow", { initialQuery: "" })
-        }
-      >
-        <Ionicons name="search" size={22} color="#0A84FF" />
-        <Text style={styles.secondaryText}>Type Destination</Text>
-      </TouchableOpacity>
-
-      {/* ACCESSIBILITY CARD */}
-      <View style={styles.card}>
-        <Text style={styles.sectionTitle}>Accessibility</Text>
-
-        <SettingRow
-          label="High Contrast"
-          value={settings.highContrast}
-          onToggle={(v) => setSettings({ highContrast: v })}
-        />
-        <SettingRow
-          label="Slow Speech"
-          value={settings.slowTts}
-          onToggle={(v) => setSettings({ slowTts: v })}
-        />
-        <SettingRow
-          label="Auto Repeat"
-          value={settings.autoRepeat}
-          onToggle={(v) => setSettings({ autoRepeat: v })}
-        />
-      </View>
-
-      {/* BOTTOM UTILITY STRIP (DEMO STYLE) */}
-      <View style={styles.utilityStrip}>
+        {/* ── SEARCH BAR ── */}
         <TouchableOpacity
-          style={styles.utilityItem}
-          onPress={emergencyCall}
+          style={styles.searchBar}
+          activeOpacity={0.8}
+          onPress={() =>
+            navigation.navigate("SearchNavigateFlow", { initialQuery: "" })
+          }
         >
-          <Ionicons name="call-outline" size={22} color="#1C1C1E" />
-          <Text style={styles.utilityText}>Emergency</Text>
+          <Ionicons name="search" size={22} color="#7C9FFF" />
+          <Text style={styles.searchText}>Type destination…</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.utilityItem}
-          onPress={shareLiveLocation}
-        >
-          <Ionicons name="location-outline" size={22} color="#1C1C1E" />
-          <Text style={styles.utilityText}>Share</Text>
-        </TouchableOpacity>
+        {/* ── QUICK SHORTCUTS ── */}
+        <View style={styles.shortcutRow}>
+          <TouchableOpacity
+            style={styles.shortcutCard}
+            activeOpacity={0.8}
+            onPress={() =>
+              navigation.navigate("SearchNavigateFlow", { initialQuery: "Home" })
+            }
+          >
+            <View style={styles.shortcutIcon}>
+              <Ionicons name="home-outline" size={24} color="#7C9FFF" />
+            </View>
+            <Text style={styles.shortcutLabel}>Home</Text>
+          </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.utilityItem}
-          onPress={() => navigation.navigate("VoiceSettings" as never)}
-        >
-          <Ionicons name="volume-high-outline" size={22} color="#1C1C1E" />
-          <Text style={styles.utilityText}>Voice</Text>
-        </TouchableOpacity>
-      </View>
+          <TouchableOpacity
+            style={[styles.shortcutCard, styles.emergencyCard]}
+            activeOpacity={0.8}
+            onPress={emergencyCall}
+          >
+            <View style={[styles.shortcutIcon, styles.emergencyIcon]}>
+              <Ionicons name="call" size={24} color="#FF6B6B" />
+            </View>
+            <Text style={[styles.shortcutLabel, styles.emergencyLabel]}>
+              Emergency
+            </Text>
+          </TouchableOpacity>
+        </View>
 
+        {/* ── ACCESSIBILITY CARD ── */}
+        <View style={styles.card}>
+          <View style={styles.cardTitleRow}>
+            <Ionicons name="accessibility" size={18} color="#7C9FFF" />
+            <Text style={styles.cardTitle}>Accessibility</Text>
+          </View>
 
-    </LinearGradient>
+          <SettingRow
+            icon="contrast-outline"
+            label="High Contrast"
+            value={settings.highContrast}
+            onToggle={(v) => setSettings({ highContrast: v })}
+          />
+          <View style={styles.divider} />
+          <SettingRow
+            icon="volume-medium-outline"
+            label="Slow Speech"
+            value={settings.slowTts}
+            onToggle={(v) => setSettings({ slowTts: v })}
+          />
+          <View style={styles.divider} />
+          <SettingRow
+            icon="repeat-outline"
+            label="Auto Repeat"
+            value={settings.autoRepeat}
+            onToggle={(v) => setSettings({ autoRepeat: v })}
+          />
+        </View>
+
+        {/* ── BOTTOM UTILITY STRIP ── */}
+        <View style={styles.utilityStrip}>
+          <TouchableOpacity
+            style={styles.utilityItem}
+            onPress={shareLiveLocation}
+          >
+            <Ionicons name="share-outline" size={26} color="#7C9FFF" />
+            <Text style={styles.utilityText}>Share</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.utilityItem}
+            onPress={() => navigation.navigate("VoiceSettings" as never)}
+          >
+            <Ionicons name="volume-high-outline" size={26} color="#7C9FFF" />
+            <Text style={styles.utilityText}>Voice</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.utilityItem}
+            onPress={() => navigation.navigate("Settings" as never)}
+          >
+            <Ionicons name="settings-outline" size={26} color="#7C9FFF" />
+            <Text style={styles.utilityText}>Settings</Text>
+          </TouchableOpacity>
+        </View>
+
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 /* ---------- SETTING ROW ---------- */
 
 function SettingRow({
+  icon,
   label,
   value,
   onToggle,
 }: {
+  icon: string;
   label: string;
   value: boolean;
   onToggle: (v: boolean) => void;
@@ -152,8 +238,17 @@ function SettingRow({
       activeOpacity={0.7}
       onPress={() => onToggle(!value)}
     >
-      <Text style={styles.rowText}>{label}</Text>
-      <Switch value={value} onValueChange={onToggle} />
+      <View style={styles.rowLeft}>
+        <Ionicons name={icon as any} size={22} color="#5A6480" />
+        <Text style={styles.rowText}>{label}</Text>
+      </View>
+      <Switch
+        value={value}
+        onValueChange={onToggle}
+        trackColor={{ false: "#2D2D4A", true: "#4A4AFF" }}
+        thumbColor={value ? "#FFFFFF" : "#5A6480"}
+        ios_backgroundColor="#2D2D4A"
+      />
     </TouchableOpacity>
   );
 }
@@ -161,181 +256,236 @@ function SettingRow({
 /* ---------- STYLES ---------- */
 
 const styles = StyleSheet.create({
-  utilityStrip: {
-    position: "absolute",
-    bottom: 28,
-
-    left: 24,
-    right: 24,
-
-    backgroundColor: "#FFFFFF",
-    borderRadius: 22,
-    height: 64,
-
-    flexDirection: "row",
-    justifyContent: "space-evenly",
-    alignItems: "center",
-
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-
-  utilityItem: {
-    alignItems: "center",
-    justifyContent: "center",
-    width: 80,
-  },
-
-  utilityText: {
-    marginTop: 2,
-    fontSize: 11,
-    fontWeight: "500",
-    color: "#1C1C1E",
-  },
-
-
   safe: {
     flex: 1,
+    backgroundColor: "#1A1A2E",
+  },
+  scroll: {
+    paddingBottom: Platform.OS === "ios" ? 40 : 28,
   },
 
   /* HEADER */
   header: {
+    flexDirection: "row",
     alignItems: "center",
-    marginTop: 24,
+    justifyContent: "space-between",
+    paddingHorizontal: 24,
+    paddingTop: 16,
+    paddingBottom: 8,
+  },
+  headerLeft: {
+    flexDirection: "row",
+    alignItems: "center",
   },
   appName: {
-    fontSize: 36,
-    fontWeight: "800",
-    color: "#0A84FF",
+    fontSize: 19,
+    fontWeight: "700",
+    color: "#C8D0FF",
     letterSpacing: 1,
+    marginLeft: 6,
   },
-  subtitle: {
-    fontSize: 18,
-    color: "#5F6C80",
-    marginTop: 6,
+  headerBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#1E2545",
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderWidth: 1,
+    borderColor: "#2D3A6A",
+  },
+  badgeText: {
+    fontSize: 13,
+    fontWeight: "500",
+    color: "#7C9FFF",
+    marginLeft: 4,
+  },
+
+  /* GREETING */
+  greetingBlock: {
+    paddingHorizontal: 24,
+    paddingTop: 8,
+    paddingBottom: 20,
+  },
+  dateText: {
+    fontSize: 14,
+    color: "#5A6480",
+    marginBottom: 4,
+  },
+  greetingText: {
+    fontSize: 28,
+    fontWeight: "700",
+    color: "#E8EEFF",
+    lineHeight: 34,
+  },
+  subtitleText: {
+    fontSize: 16,
+    color: "#8892AA",
+    marginTop: 5,
   },
 
   /* HERO */
   heroContainer: {
     alignItems: "center",
     justifyContent: "center",
-    marginVertical: 28,
+    height: 180,
+    marginBottom: 8,
   },
-  glow: {
+  ringOuter: {
     position: "absolute",
-    width: 260,
-    height: 260,
-    borderRadius: 130,
-    backgroundColor: "#0A84FF",
-    opacity: 0.18,
+    width: 170,
+    height: 170,
+    borderRadius: 85,
+    borderWidth: 2,
+    borderColor: "rgba(124,159,255,0.3)",
+  },
+  ringInner: {
+    position: "absolute",
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    borderWidth: 2,
+    borderColor: "rgba(124,159,255,0.45)",
   },
   heroButton: {
-    width: 210,
-    height: 210,
-    borderRadius: 105,
-    backgroundColor: "#0A84FF",
+    width: 110,
+    height: 110,
+    borderRadius: 55,
+    backgroundColor: "#4A4AFF",
     alignItems: "center",
     justifyContent: "center",
-
-    shadowColor: "#0A84FF",
-    shadowOffset: { width: 0, height: 14 },
-    shadowOpacity: 0.45,
-    shadowRadius: 30,
-    elevation: 14,
+    gap: 6,
   },
   heroText: {
-    marginTop: 12,
-    color: "#FFF",
-    fontSize: 20,
-    fontWeight: "700",
-    marginVertical: 3,
+    color: "#C8D0FF",
+    fontSize: 14,
+    fontWeight: "600",
   },
 
-  /* SECONDARY */
-  secondaryButton: {
+  /* SEARCH */
+  searchBar: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#FFF",
-    marginHorizontal: 50,
-    paddingVertical: 20,
+    backgroundColor: "#252540",
+    marginHorizontal: 20,
+    paddingVertical: 16,
+    paddingHorizontal: 18,
     borderRadius: 18,
-
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 4,
+    borderWidth: 1,
+    borderColor: "#3A3A5C",
+    gap: 12,
+    marginBottom: 14,
   },
-  secondaryText: {
+  searchText: {
     fontSize: 18,
-    fontWeight: "600",
-    color: "#0A84FF",
-    marginLeft: 10,
+    color: "#4A5070",
   },
 
-  /* CARD */
-  card: {
-    backgroundColor: "#FFF",
-    borderRadius: 24,
-    marginTop: 26,
-    marginHorizontal: 16,
+  /* SHORTCUTS */
+  shortcutRow: {
+    flexDirection: "row",
+    marginHorizontal: 20,
+    gap: 12,
+    marginBottom: 14,
+  },
+  shortcutCard: {
+    flex: 1,
+    backgroundColor: "#252540",
+    borderRadius: 20,
     padding: 16,
-
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.1,
-    shadowRadius: 14,
-    elevation: 6,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderWidth: 1,
+    borderColor: "#3A3A5C",
   },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: "700",
-    marginBottom: 10,
+  emergencyCard: {
+    backgroundColor: "#3A1A1A",
+    borderColor: "#5C2A2A",
+  },
+  shortcutIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    backgroundColor: "#1E2545",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  emergencyIcon: {
+    backgroundColor: "#5C2020",
+  },
+  shortcutLabel: {
+    fontSize: 17,
+    fontWeight: "600",
+    color: "#C8D0FF",
+  },
+  emergencyLabel: {
+    color: "#FF9999",
+  },
+
+  /* ACCESSIBILITY CARD */
+  card: {
+    backgroundColor: "#252540",
+    borderRadius: 20,
+    marginHorizontal: 20,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: "#3A3A5C",
+    marginBottom: 14,
+  },
+  cardTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 16,
+  },
+  cardTitle: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#C8D0FF",
+    marginLeft: 4,
   },
   row: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    height: 56,
+    height: 52,
   },
-  rowText: {
-    fontSize: 18,
-    fontWeight: "500",
-  },
-
-  /* VOICE SETTINGS */
-  voiceSettings: {
+  rowLeft: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    marginTop: 14,
-    paddingVertical: 14,
-    borderRadius: 16,
-    backgroundColor: "#F0F5FF",
+    gap: 12,
   },
-  voiceSettingsText: {
-    marginLeft: 8,
-    fontSize: 18,
-    fontWeight: "600",
-    color: "#0A84FF",
+  rowText: {
+    fontSize: 17,
+    color: "#C8D0FF",
+    marginLeft: 4,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: "#2D2D4A",
   },
 
-  /* FOOTER */
-  footer: {
-    marginTop: "auto",
-    backgroundColor: "#FFF",
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    padding: 20,
-
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -6 },
-    shadowOpacity: 0.12,
-    shadowRadius: 18,
-    elevation: 10,
+  /* UTILITY STRIP */
+  utilityStrip: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    backgroundColor: "#252540",
+    marginHorizontal: 20,
+    borderRadius: 18,
+    paddingVertical: 16,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: "#3A3A5C",
+  },
+  utilityItem: {
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+  },
+  utilityText: {
+    fontSize: 13,
+    color: "#8892AA",
+    fontWeight: "500",
   },
 });

@@ -9,9 +9,12 @@ import {
   Alert,
   ActivityIndicator,
   StyleSheet,
+  SafeAreaView,
+  StatusBar,
 } from "react-native";
 import * as Location from "expo-location";
 import { StackScreenProps } from "@react-navigation/stack";
+import { Ionicons } from "@expo/vector-icons";
 import { getJSON, API_BASE } from "../utils/api";
 import { handleRouteError } from "../utils/errors";
 import { useSeniorMode } from "../context/SeniorModeContext";
@@ -21,6 +24,7 @@ import { speakTagalog } from "../utils/speak";
 type Prediction = {
   description: string;
   place_id: string;
+  distance_text?: string;
 };
 
 type Props = StackScreenProps<RootStackParamList, "SearchNavigateFlow">;
@@ -30,31 +34,51 @@ export default function SearchNavigateFlow({ route, navigation }: Props) {
   const [query, setQuery] = useState<string>(initialQuery);
   const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
-  const [originParam, setOriginParam] = useState<string | undefined>(route.params?.origin);
+  const [originParam, setOriginParam] = useState<string | undefined>(
+    route.params?.origin
+  );
+  const [currentAddress, setCurrentAddress] = useState<string>("Getting your location…");
+  const [locationLoading, setLocationLoading] = useState<boolean>(true);
 
   const { settings } = useSeniorMode();
 
   useEffect(() => {
-    if (initialQuery) {
-      doSearch(initialQuery);
-    }
-
-    // Try to resolve device location once (non-blocking)
-    (async () => {
-      if (!originParam) {
-        try {
-          const locPerm = await Location.requestForegroundPermissionsAsync();
-          if (locPerm.status === "granted") {
-            const pos = await Location.getCurrentPositionAsync({});
-            setOriginParam(`${pos.coords.latitude},${pos.coords.longitude}`);
-          }
-        } catch (e) {
-          // ignore; backend will geocode if needed
-        }
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (initialQuery) doSearch(initialQuery);
+    resolveLocation();
   }, []);
+
+  async function resolveLocation() {
+    setLocationLoading(true);
+    try {
+      const locPerm = await Location.requestForegroundPermissionsAsync();
+      if (locPerm.status === "granted") {
+        const pos = await Location.getCurrentPositionAsync({});
+        const { latitude, longitude } = pos.coords;
+        setOriginParam(`${latitude},${longitude}`);
+
+        // Reverse geocode to get a readable address
+        const geo = await Location.reverseGeocodeAsync({ latitude, longitude });
+        if (geo && geo.length > 0) {
+          const g = geo[0];
+          const parts = [
+            g.streetNumber,
+            g.street,
+            g.district || g.subregion,
+            g.city,
+          ].filter(Boolean);
+          setCurrentAddress(parts.join(", ") || "Current Location");
+        } else {
+          setCurrentAddress("Current Location");
+        }
+      } else {
+        setCurrentAddress("Location permission denied");
+      }
+    } catch (_) {
+      setCurrentAddress("Unable to get location");
+    } finally {
+      setLocationLoading(false);
+    }
+  }
 
   async function doSearch(q: string) {
     if (!q || q.trim().length === 0) {
@@ -63,11 +87,11 @@ export default function SearchNavigateFlow({ route, navigation }: Props) {
     }
     setLoading(true);
     try {
-      // getJSON uses API_BASE and throws on http errors
-      const data = await getJSON<{ predictions: Prediction[] }>(`/search?q=${encodeURIComponent(q)}`);
+      const data = await getJSON<{ predictions: Prediction[] }>(
+        `/search?q=${encodeURIComponent(q)}`
+      );
       setPredictions(data.predictions || []);
     } catch (err: any) {
-      console.error("Search error:", err);
       Alert.alert("Search error", String(err?.message ?? err));
     } finally {
       setLoading(false);
@@ -77,15 +101,18 @@ export default function SearchNavigateFlow({ route, navigation }: Props) {
   async function onSelectPrediction(item: Prediction) {
     setLoading(true);
     try {
-      // 1) Get place details (via backend)
-      const pd = await getJSON<{ place: any }>(`/placedetails?place_id=${encodeURIComponent(item.place_id)}`);
+      const pd = await getJSON<{ place: any }>(
+        `/placedetails?place_id=${encodeURIComponent(item.place_id)}`
+      );
       const place = pd.place;
       if (!place) throw new Error("Place details missing from server");
 
-      // Build a readable address for confirmation
-      const addr = place.address || place.formatted_address || item.description || "selected place";
+      const addr =
+        place.address ||
+        place.formatted_address ||
+        item.description ||
+        "selected place";
 
-      // Confirm with user (senior-friendly)
       const confirmed = await new Promise<boolean>((resolve) => {
         Alert.alert("Confirm destination", `Pupunta ka ba sa:\n\n${addr}`, [
           { text: "Oo", onPress: () => resolve(true) },
@@ -93,42 +120,31 @@ export default function SearchNavigateFlow({ route, navigation }: Props) {
         ]);
       });
 
-      if (!confirmed) {
-        setLoading(false);
-        return;
-      }
+      if (!confirmed) { setLoading(false); return; }
 
-      // 2) Prepare origin (prefers device originParam)
       let origin = originParam;
       if (!origin) {
         try {
           const pos = await Location.getCurrentPositionAsync({});
           origin = `${pos.coords.latitude},${pos.coords.longitude}`;
-        } catch (_) {
-          // last resort: ask backend to geocode (we'll pass place lat,lng as origin fallback)
-          origin = undefined;
-        }
+        } catch (_) { origin = undefined; }
       }
 
-      // 3) Build destination (ensure lat/lng present)
       const destLat = place.lat ?? place.latitude ?? place.geometry?.location?.lat;
       const destLng = place.lng ?? place.longitude ?? place.geometry?.location?.lng;
-      if (destLat == null || destLng == null) {
+      if (destLat == null || destLng == null)
         throw new Error("Destination coordinates are missing");
-      }
 
-      // 4) Call /route endpoint via API helper so API_BASE works on device
-      // If we have origin string, include it; otherwise omit and let backend geocode
       const originParamStr = origin ? `&origin=${encodeURIComponent(origin)}` : "";
-      const routeUrl = `/route?destination=${encodeURIComponent(`${destLat},${destLng}`)}&mode=walking${originParamStr}`;
+      const routeUrl = `/route?destination=${encodeURIComponent(
+        `${destLat},${destLng}`
+      )}&mode=walking${originParamStr}`;
 
-      // Use fetch + JSON because backend returns structured {status: "ok"|"error", ...}
       const resp = await fetch(API_BASE + routeUrl);
       const data = await resp.json();
 
       if (!resp.ok || data.status === "error") {
         const message = handleRouteError(data);
-        // speak error for seniors (if enabled)
         if (settings.slowTts) {
           try {
             await speakTagalog(message, {
@@ -138,86 +154,369 @@ export default function SearchNavigateFlow({ route, navigation }: Props) {
               emphasis: settings.ttsEmphasis,
               pauseMs: settings.ttsPauseMs,
             });
-          } catch (e) {
-            console.warn("TTS error:", e);
-          }
+          } catch (e) { console.warn("TTS error:", e); }
         }
         Alert.alert("Route error", message);
         setLoading(false);
         return;
       }
 
-      const routeObj = data.route;
-      // Navigate to NavigationMapScreen with normalized route object
-      navigation.navigate("NavigationMapScreen", { routeData: routeObj });
+      navigation.navigate("NavigationMapScreen", { routeData: data.route });
     } catch (err: any) {
-      console.error("onSelectPrediction error:", err);
       Alert.alert("Error", err?.message ?? String(err));
     } finally {
       setLoading(false);
     }
   }
 
-  return (
-    <View style={[styles.container, settings.highContrast && { backgroundColor: "#000" }]}>
-      <Text style={[styles.label, settings.bigText && { fontSize: 20, color: settings.highContrast ? "#FFD700" : undefined }]}>
-        Search destination
-      </Text>
+  // Split description into name + address parts
+  const splitDescription = (desc: string) => {
+    const commaIdx = desc.indexOf(",");
+    if (commaIdx === -1) return { name: desc, address: "" };
+    return {
+      name: desc.substring(0, commaIdx).trim(),
+      address: desc.substring(commaIdx + 1).trim(),
+    };
+  };
 
-      <View style={styles.searchRow}>
-        <TextInput
-          value={query}
-          onChangeText={(t) => setQuery(t)}
-          placeholder="Type or speak a place"
-          onSubmitEditing={() => doSearch(query)}
-          style={[styles.input, settings.highContrast && { backgroundColor: "#111", color: "#fff", borderColor: "#444" }]}
-          returnKeyType="search"
-        />
-        <TouchableOpacity onPress={() => doSearch(query)} style={styles.searchBtn}>
-          <Text style={{ color: "#fff" }}>Search</Text>
+  return (
+    <SafeAreaView style={styles.safe}>
+      <StatusBar barStyle="light-content" backgroundColor="#1A1A2E" />
+
+      {/* ── HEADER ── */}
+      <View style={styles.topBar}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+          <Ionicons name="chevron-back" size={26} color="#7C9FFF" />
         </TouchableOpacity>
+        <View style={styles.headerCenter}>
+          <Ionicons name="location" size={16} color="#7C9FFF" />
+          <Text style={styles.headerTitle}>TARA-AI</Text>
+        </View>
+        <View style={{ width: 40 }} />
       </View>
 
-      {loading && <ActivityIndicator style={{ marginTop: 12 }} />}
+      {/* ── CURRENT LOCATION BANNER ── */}
+      <View style={styles.locationBanner}>
+        <View style={styles.locationRow}>
+          <View style={styles.locationDot}>
+            <View style={styles.locationDotInner} />
+          </View>
+          <View style={styles.locationTextBlock}>
+            <Text style={styles.locationLabel}>Your location</Text>
+            {locationLoading ? (
+              <View style={styles.locationLoadingRow}>
+                <ActivityIndicator size="small" color="#7C9FFF" />
+                <Text style={styles.locationAddress}>Getting location…</Text>
+              </View>
+            ) : (
+              <Text style={styles.locationAddress} numberOfLines={2}>
+                {currentAddress}
+              </Text>
+            )}
+          </View>
+        </View>
 
+        {/* SEARCH INPUT */}
+        <View style={styles.searchRow}>
+          <View style={styles.inputWrapper}>
+            <Ionicons name="search-outline" size={20} color="#7C9FFF" />
+            <TextInput
+              value={query}
+              onChangeText={(t) => setQuery(t)}
+              placeholder="Search destination…"
+              placeholderTextColor="#4A5070"
+              onSubmitEditing={() => doSearch(query)}
+              style={styles.input}
+              returnKeyType="search"
+              selectionColor="#7C9FFF"
+              autoFocus
+            />
+            {query.length > 0 && (
+              <TouchableOpacity onPress={() => { setQuery(""); setPredictions([]); }}>
+                <Ionicons name="close-circle" size={20} color="#5A6480" />
+              </TouchableOpacity>
+            )}
+          </View>
+          <TouchableOpacity
+            onPress={() => doSearch(query)}
+            style={styles.searchBtn}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.searchBtnText}>Go</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* ── LOADING ── */}
+      {loading && (
+        <View style={styles.loadingRow}>
+          <ActivityIndicator color="#7C9FFF" size="small" />
+          <Text style={styles.loadingText}>Searching…</Text>
+        </View>
+      )}
+
+      {/* ── RESULTS ── */}
       <FlatList
-        style={{ marginTop: 12 }}
         data={predictions}
         keyExtractor={(it) => it.place_id}
-        renderItem={({ item }) => (
-          <TouchableOpacity onPress={() => onSelectPrediction(item)} style={[styles.predItem, settings.highContrast && { borderColor: "#333" }]}>
-            <Text style={[styles.predTitle, settings.bigText && { fontSize: 18, color: settings.highContrast ? "#fff" : undefined }]}>
-              {item.description}
-            </Text>
-          </TouchableOpacity>
-        )}
+        contentContainerStyle={styles.listContent}
+        renderItem={({ item }) => {
+          const { name, address } = splitDescription(item.description);
+          return (
+            <TouchableOpacity
+              onPress={() => onSelectPrediction(item)}
+              style={styles.resultCard}
+              activeOpacity={0.75}
+            >
+              <View style={styles.resultIconBox}>
+                <Ionicons name="location" size={22} color="#7C9FFF" />
+              </View>
+              <View style={styles.resultText}>
+                <Text
+                  style={[styles.resultName, settings.bigText && { fontSize: 18 }]}
+                  numberOfLines={1}
+                >
+                  {name}
+                </Text>
+                {address ? (
+                  <Text style={styles.resultAddress} numberOfLines={2}>
+                    {address}
+                  </Text>
+                ) : null}
+                {item.distance_text ? (
+                  <Text style={styles.resultDistance}>{item.distance_text}</Text>
+                ) : null}
+              </View>
+              <Ionicons name="chevron-forward" size={18} color="#3A3A5C" />
+            </TouchableOpacity>
+          );
+        }}
+        ItemSeparatorComponent={() => <View style={styles.separator} />}
         ListEmptyComponent={() =>
-          !loading ? <Text style={{ textAlign: "center", color: "gray", marginTop: 24 }}>No results</Text> : null
+          !loading ? (
+            <View style={styles.emptyState}>
+              <Ionicons name="search" size={52} color="#2D2D4A" />
+              <Text style={styles.emptyTitle}>
+                {query.length > 0 ? "No results found" : "Search for a destination"}
+              </Text>
+              <Text style={styles.emptySubtitle}>
+                {query.length > 0
+                  ? "Try a different keyword or address"
+                  : "Type a place name or address above"}
+              </Text>
+            </View>
+          ) : null
         }
       />
-    </View>
+    </SafeAreaView>
   );
 }
 
+/* ── STYLES ── */
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 12 },
-  label: { fontSize: 16, fontWeight: "600", marginBottom: 8 },
-  searchRow: { flexDirection: "row", alignItems: "center" },
+  safe: {
+    flex: 1,
+    backgroundColor: "#1A1A2E",
+  },
+
+  /* TOP BAR */
+  topBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#2D2D4A",
+  },
+  backBtn: {
+    width: 40,
+    height: 40,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerCenter: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  headerTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#C8D0FF",
+    letterSpacing: 1,
+    marginLeft: 4,
+  },
+
+  /* LOCATION BANNER */
+  locationBanner: {
+    backgroundColor: "#252540",
+    paddingHorizontal: 20,
+    paddingTop: 18,
+    paddingBottom: 18,
+    borderBottomWidth: 1,
+    borderBottomColor: "#2D2D4A",
+    gap: 16,
+  },
+  locationRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 14,
+  },
+  locationDot: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: "#7C9FFF",
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 2,
+    flexShrink: 0,
+  },
+  locationDotInner: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#7C9FFF",
+  },
+  locationTextBlock: {
+    flex: 1,
+  },
+  locationLabel: {
+    fontSize: 12,
+    color: "#5A6480",
+    fontWeight: "600",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 4,
+  },
+  locationLoadingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  locationAddress: {
+    fontSize: 16,
+    color: "#E8EEFF",
+    fontWeight: "600",
+    lineHeight: 22,
+  },
+
+  /* SEARCH ROW */
+  searchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  inputWrapper: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#1A1A2E",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#3A3A5C",
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    gap: 10,
+  },
   input: {
     flex: 1,
-    borderWidth: 1,
-    borderColor: "#ddd",
-    padding: 10,
-    borderRadius: 8,
-    marginRight: 8,
-    backgroundColor: "#fff",
+    fontSize: 16,
+    color: "#E8EEFF",
   },
   searchBtn: {
-    backgroundColor: "#007AFF",
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 8,
+    backgroundColor: "#4A4AFF",
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  predItem: { paddingVertical: 12, borderBottomWidth: 1, borderColor: "#eee" },
-  predTitle: { fontSize: 15 },
+  searchBtnText: {
+    color: "#fff",
+    fontWeight: "700",
+    fontSize: 16,
+  },
+
+  /* LOADING */
+  loadingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+  },
+  loadingText: {
+    fontSize: 15,
+    color: "#7C9FFF",
+  },
+
+  /* RESULT CARDS */
+  listContent: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 32,
+  },
+  separator: {
+    height: 8,
+  },
+  resultCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#252540",
+    borderRadius: 18,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "#3A3A5C",
+    gap: 14,
+  },
+  resultIconBox: {
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    backgroundColor: "#1E2545",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
+  resultText: {
+    flex: 1,
+    gap: 3,
+  },
+  resultName: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#E8EEFF",
+  },
+  resultAddress: {
+    fontSize: 13,
+    color: "#5A6480",
+    lineHeight: 18,
+  },
+  resultDistance: {
+    fontSize: 12,
+    color: "#7C9FFF",
+    fontWeight: "600",
+    marginTop: 2,
+  },
+
+  /* EMPTY */
+  emptyState: {
+    alignItems: "center",
+    marginTop: 60,
+    gap: 12,
+  },
+  emptyTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#5A6480",
+  },
+  emptySubtitle: {
+    fontSize: 14,
+    color: "#3A3A5C",
+    textAlign: "center",
+    paddingHorizontal: 30,
+  },
 });
